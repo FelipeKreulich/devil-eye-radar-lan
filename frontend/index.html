@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LAN RADAR — devil eye</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="scanlines"></div>
+
+  <header>
+    <div id="logo">
+      <span class="blink">▶</span>
+      <span>LAN RADAR</span>
+      <span class="sub">// DEVIL EYE</span>
+    </div>
+    <div id="status-bar">
+      <span>IFACE: <span id="iface">—</span></span>
+      <span>NODES: <span id="count">0</span></span>
+      <span id="scan-status" class="pulse-text">SCANNING...</span>
+      <span id="clock"></span>
+    </div>
+    <div id="toolbar">
+      <button id="mitm-btn" class="tbtn" title="ARP MITM — intercept all LAN traffic" onclick="toggleMITM()">
+        <span id="mitm-icon">⚡</span> MITM: <span id="mitm-state">OFF</span>
+      </button>
+      <button class="tbtn" title="Export devices as JSON" onclick="exportData()">⬇ EXPORT</button>
+    </div>
+  </header>
+
+  <main>
+    <canvas id="radar"></canvas>
+
+    <!-- Alert toasts -->
+    <div id="toast-container"></div>
+
+    <!-- Dossier panel -->
+    <aside id="dossier" class="hidden">
+      <div id="dossier-header">
+        <span id="dossier-title">NODE DOSSIER</span>
+        <button id="dossier-close" onclick="closeDossier()">✕</button>
+      </div>
+      <div id="dossier-body">
+        <div class="field"><label>IP</label><span id="d-ip"></span></div>
+        <div class="field"><label>MAC</label><span id="d-mac"></span></div>
+        <div class="field"><label>VENDOR</label><span id="d-vendor"></span></div>
+        <div class="field"><label>HOSTNAME</label><span id="d-hostname"></span></div>
+        <div class="field"><label>OS</label><span id="d-os"></span></div>
+        <div class="field"><label>TTL</label><span id="d-ttl"></span></div>
+        <div class="field"><label>COUNTRY</label><span id="d-country"></span></div>
+
+        <div class="field bw-field">
+          <label>BANDWIDTH</label>
+          <span id="d-bw-in" class="bw-in">↓ —</span>
+          <span id="d-bw-out" class="bw-out">↑ —</span>
+        </div>
+        <div class="field"><label>STATUS</label><span id="d-status"></span></div>
+        <div class="field"><label>FIRST SEEN</label><span id="d-first"></span></div>
+        <div class="field"><label>LAST SEEN</label><span id="d-last"></span></div>
+        <div id="sparkline-section"><label>LATENCY (ms)</label><canvas id="spark-canvas" width="220" height="28" style="display:block"></canvas></div>
+        <div id="ports-section">
+          <label>OPEN PORTS</label>
+          <div id="d-ports"></div>
+        </div>
+        <div id="timeline-section">
+          <label>TIMELINE</label>
+          <div id="d-timeline"></div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Activity Feed -->
+  <div id="feed">
+    <div id="feed-header">
+      <span id="feed-live"><span class="live-dot"></span>ACTIVITY FEED</span>
+      <div id="feed-filters">
+        <button class="fbtn active" data-f="ALL">ALL</button>
+        <button class="fbtn" data-f="DNS">DNS</button>
+        <button class="fbtn" data-f="HTTPS">HTTPS</button>
+        <button class="fbtn" data-f="HTTP">HTTP</button>
+      </div>
+      <div id="feed-stats"><span id="feed-count">0</span> events</div>
+      <button id="feed-toggle" title="toggle">▲</button>
+    </div>
+    <div id="feed-body">
+      <div id="feed-list"></div>
+    </div>
+  </div>
+
+  <div id="filter-bar">
+    <span class="filter-label">SHOW:</span>
+    <button class="filt active" data-filt="ALL">ALL</button>
+    <button class="filt" data-filt="ACTIVE">ACTIVE</button>
+    <button class="filt" data-filt="PORTS">PORTS OPEN</button>
+    <button class="filt" data-filt="THREAT">THREAT</button>
+    <span class="filter-sep">|</span>
+    <span class="filter-label">VENDOR:</span>
+    <input id="vendor-filter" type="text" placeholder="e.g. Apple" maxlength="20" autocomplete="off"/>
+  </div>
+
+  <div id="legend">
+    <span class="dot gateway"></span>GATEWAY
+    <span class="dot active"></span>ACTIVE
+    <span class="dot inactive"></span>INACTIVE
+    <span class="dot highlight"></span>PORTS OPEN
+    <span class="dot threat"></span>THREAT
+  </div>
+
+  <script src="radar.js"></script>
+</body>
+</html>
