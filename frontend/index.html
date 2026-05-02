@@ -26,6 +26,11 @@
         <span id="mitm-icon">⚡</span> MITM: <span id="mitm-state">OFF</span>
       </button>
       <button class="tbtn" title="Export devices as JSON" onclick="exportData()">⬇ EXPORT</button>
+      <button class="tbtn" id="topo-btn" title="Topology mode" onclick="toggleTopoMode()">⬡ TOPO</button>
+      <button class="tbtn" id="heat-btn" title="Heatmap overlay" onclick="toggleHeatmap()">◉ HEAT</button>
+      <button class="tbtn" id="stats-btn" title="Statistics" onclick="toggleStats()">≡ STATS</button>
+      <button class="tbtn" id="replay-btn" title="Session replay" onclick="toggleReplay()">⏪ REPLAY</button>
+      <button class="tbtn" id="spoof-btn" title="DNS Spoof" onclick="toggleDNSSpoof()">⚡ SPOOF</button>
     </div>
   </header>
 
@@ -34,6 +39,50 @@
 
     <!-- Alert toasts -->
     <div id="toast-container"></div>
+
+    <!-- Stats panel -->
+    <div id="stats-panel" class="hidden">
+      <div class="panel-header"><span>STATISTICS</span><button onclick="toggleStats()">✕</button></div>
+      <div id="stats-body"></div>
+    </div>
+
+    <!-- Replay panel -->
+    <div id="replay-panel" class="hidden">
+      <div class="panel-header"><span>SESSION REPLAY</span><button onclick="toggleReplay()">✕</button></div>
+      <div id="replay-body">
+        <div class="replay-row">
+          <select id="replay-date"><option value="">— select date —</option></select>
+          <button class="tbtn" id="replay-load-btn" onclick="loadReplaySession()">LOAD</button>
+        </div>
+        <div class="replay-row" id="replay-controls" style="display:none">
+          <button class="tbtn" id="replay-play-btn" onclick="playReplay()">▶ PLAY</button>
+          <button class="tbtn" onclick="stopReplay()">■ STOP</button>
+          <select id="replay-speed">
+            <option value="1">1×</option>
+            <option value="5">5×</option>
+            <option value="20">20×</option>
+          </select>
+        </div>
+        <div id="replay-status" style="color:#007a20;font-size:10px;margin-top:6px"></div>
+      </div>
+    </div>
+
+    <!-- DNS Spoof panel -->
+    <div id="spoof-panel" class="hidden">
+      <div class="panel-header"><span>DNS SPOOF</span><button onclick="toggleDNSSpoof()">✕</button></div>
+      <div id="spoof-body">
+        <div id="spoof-toggle-row">
+          <button class="tbtn" id="spoof-toggle-btn" onclick="toggleSpoofActive()">ENABLE</button>
+          <span id="spoof-status" style="font-size:10px;color:#007a20">INACTIVE</span>
+        </div>
+        <div class="replay-row" style="margin-top:8px">
+          <input id="spoof-domain" placeholder="domain.com" style="width:130px"/>
+          <input id="spoof-ip" placeholder="192.168.x.x" style="width:100px"/>
+          <button class="tbtn" onclick="addSpoofRule()">ADD</button>
+        </div>
+        <div id="spoof-rules"></div>
+      </div>
+    </div>
 
     <!-- Dossier panel -->
     <aside id="dossier" class="hidden">
@@ -59,6 +108,15 @@
         <div class="field"><label>FIRST SEEN</label><span id="d-first"></span></div>
         <div class="field"><label>LAST SEEN</label><span id="d-last"></span></div>
         <div id="sparkline-section"><label>LATENCY (ms)</label><canvas id="spark-canvas" width="220" height="28" style="display:block"></canvas></div>
+
+        <div id="cve-section" style="display:none">
+          <label>CVEs DETECTED</label>
+          <div id="d-cves"></div>
+        </div>
+        <div class="field" id="device-type-field" style="display:none">
+          <label>DEVICE TYPE</label><span id="d-device-type"></span>
+        </div>
+
         <div id="ports-section">
           <label>OPEN PORTS</label>
           <div id="d-ports"></div>

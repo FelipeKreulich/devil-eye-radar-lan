@@ -6,6 +6,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -25,6 +27,15 @@ type EventLogger interface {
 	Log(ev Event)
 }
 
+type DNSSpoofController interface {
+	Start() error
+	Stop()
+	Active() bool
+	AddRule(domain, ip string)
+	RemoveRule(domain string)
+	Rules() map[string]string
+}
+
 type Hub struct {
 	mu          sync.RWMutex
 	clients     map[*websocket.Conn]bool
@@ -34,6 +45,7 @@ type Hub struct {
 	trafficBuf []TrafficEvent
 	mitmCtrl   MITMController
 	logger     EventLogger
+	dnsSpoof   DNSSpoofController
 }
 
 func NewHub() *Hub {
@@ -48,6 +60,8 @@ func NewHub() *Hub {
 func (h *Hub) SetMITMController(m MITMController) { h.mitmCtrl = m }
 
 func (h *Hub) SetLogger(l EventLogger) { h.logger = l }
+
+func (h *Hub) SetDNSSpoofController(d DNSSpoofController) { h.dnsSpoof = d }
 
 func (h *Hub) Broadcast(e Event) {
 	h.mu.Lock()
@@ -200,6 +214,103 @@ func (h *Hub) Listen(addr string, staticFS fs.FS) error {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		enc.Encode(list)
+	})
+
+	// Sessions API
+	mux.HandleFunc("/api/sessions", func(w http.ResponseWriter, r *http.Request) {
+		entries, err := os.ReadDir("data/sessions")
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("[]"))
+			return
+		}
+		var dates []string
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
+				dates = append(dates, strings.TrimSuffix(e.Name(), ".jsonl"))
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(dates)
+	})
+
+	mux.HandleFunc("/api/sessions/", func(w http.ResponseWriter, r *http.Request) {
+		date := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
+		if date == "" || strings.Contains(date, "/") || strings.Contains(date, "..") {
+			http.Error(w, "invalid", 400)
+			return
+		}
+		path := "data/sessions/" + date + ".jsonl"
+		http.ServeFile(w, r, path)
+	})
+
+	// DNS spoof endpoints
+	mux.HandleFunc("/api/dnsspoof/status", func(w http.ResponseWriter, r *http.Request) {
+		active := h.dnsSpoof != nil && h.dnsSpoof.Active()
+		rules := map[string]string{}
+		if h.dnsSpoof != nil {
+			rules = h.dnsSpoof.Rules()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"active": active, "rules": rules})
+	})
+
+	mux.HandleFunc("/api/dnsspoof/on", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "use POST", 405)
+			return
+		}
+		if h.dnsSpoof == nil {
+			http.Error(w, "unavailable", 503)
+			return
+		}
+		h.dnsSpoof.Start()
+		h.Events <- Event{Type: EventAlert, Alert: &AlertEvent{Level: "warning", Message: "DNS SPOOF ativo — redirecionando DNS da LAN"}}
+		w.WriteHeader(204)
+	})
+
+	mux.HandleFunc("/api/dnsspoof/off", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "use POST", 405)
+			return
+		}
+		if h.dnsSpoof != nil {
+			h.dnsSpoof.Stop()
+		}
+		h.Events <- Event{Type: EventAlert, Alert: &AlertEvent{Level: "info", Message: "DNS SPOOF desativado"}}
+		w.WriteHeader(204)
+	})
+
+	mux.HandleFunc("/api/dnsspoof/rules", func(w http.ResponseWriter, r *http.Request) {
+		if h.dnsSpoof == nil {
+			http.Error(w, "unavailable", 503)
+			return
+		}
+		switch r.Method {
+		case http.MethodPost:
+			var body struct {
+				Domain string `json:"domain"`
+				IP     string `json:"ip"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			h.dnsSpoof.AddRule(body.Domain, body.IP)
+			w.WriteHeader(204)
+		case http.MethodDelete:
+			var body struct {
+				Domain string `json:"domain"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			h.dnsSpoof.RemoveRule(body.Domain)
+			w.WriteHeader(204)
+		default:
+			http.Error(w, "use POST or DELETE", 405)
+		}
 	})
 
 	ln, err := net.Listen("tcp", addr)

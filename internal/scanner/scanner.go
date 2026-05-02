@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/antraz/devil-eye-lan-radar/internal/api"
+	"github.com/antraz/devil-eye-lan-radar/internal/cve"
 	"github.com/antraz/devil-eye-lan-radar/internal/geo"
 	"github.com/antraz/devil-eye-lan-radar/internal/oui"
 	"github.com/antraz/devil-eye-lan-radar/internal/store"
@@ -117,9 +118,14 @@ func (s *Scanner) scan() {
 		log.Printf("ARP scan error: %v", err)
 	}
 
-	mdnsCh := make(chan map[string]string, 1)
-	go func() { mdnsCh <- MDNSQuery(2 * time.Second) }()
-	mdns := <-mdnsCh
+	mdnsCh := make(chan struct{ h map[string]string; t map[string]string }, 1)
+	go func() {
+		h, t := MDNSQuery(2 * time.Second)
+		mdnsCh <- struct{ h map[string]string; t map[string]string }{h, t}
+	}()
+	res := <-mdnsCh
+	mdns := res.h
+	mdnsTypes := res.t
 
 	now := time.Now()
 	seen := make(map[string]bool)
@@ -156,6 +162,7 @@ func (s *Scanner) scan() {
 				Country:     meta.Country,
 				CountryCode: meta.Code,
 				Timeline:    meta.Timeline,
+				DeviceType:  mdnsTypes[ip],
 			}
 			go s.enrich(dev)
 
@@ -213,6 +220,10 @@ func (s *Scanner) scan() {
 				existing.Label = meta.Label
 				changed = true
 			}
+			if mdnsTypes[ip] != "" && existing.DeviceType == "" {
+				existing.DeviceType = mdnsTypes[ip]
+				changed = true
+			}
 			s.mu.Unlock()
 
 			if macStr != oldMAC {
@@ -248,6 +259,30 @@ func (s *Scanner) enrich(dev *api.Device) {
 	pingRes := Ping(dev.IP, 2*time.Second)
 	services := ScanPorts(dev.IP, 1*time.Second)
 
+	// Assign topology layer
+	topoLayer := 2
+	if dev.IsGateway {
+		topoLayer = 0
+	} else {
+		for _, svc := range services {
+			if svc.Port == 161 || svc.Port == 179 || svc.Port == 520 {
+				topoLayer = 1
+				break
+			}
+		}
+		if pingRes.OS == "Network Device (Cisco/Juniper)" {
+			topoLayer = 1
+		}
+	}
+
+	// CVE matching
+	var cves []api.CVEEntry
+	for _, svc := range services {
+		for _, e := range cve.Match(svc.Port, svc.Banner) {
+			cves = append(cves, api.CVEEntry{ID: e.ID, Severity: e.Severity, Desc: e.Desc})
+		}
+	}
+
 	s.mu.Lock()
 	d, ok := s.devices[dev.IP]
 	if ok {
@@ -256,6 +291,8 @@ func (s *Scanner) enrich(dev *api.Device) {
 			d.OS = pingRes.OS
 		}
 		d.OpenPorts = services
+		d.TopoLayer = topoLayer
+		d.CVEs = cves
 	}
 	s.mu.Unlock()
 

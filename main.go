@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/antraz/devil-eye-lan-radar/internal/api"
+	"github.com/antraz/devil-eye-lan-radar/internal/dnsspoof"
 	"github.com/antraz/devil-eye-lan-radar/internal/logger"
 	"github.com/antraz/devil-eye-lan-radar/internal/mitm"
 	"github.com/antraz/devil-eye-lan-radar/internal/probe"
@@ -58,6 +59,13 @@ func main() {
 		hub.SetMITMController(&mitmWrapper{mgr: mitmMgr, sc: sc})
 	}
 
+	// DNS spoofer
+	var dnsSpoofer *dnsspoof.Spoofer
+	if sc.Iface() != nil {
+		dnsSpoofer = dnsspoof.New(sc.Iface().Name)
+		hub.SetDNSSpoofController(dnsSpoofer)
+	}
+
 	addr := "127.0.0.1:7777"
 	if err := hub.Listen(addr, static); err != nil {
 		log.Fatal("server:", err)
@@ -80,6 +88,9 @@ func main() {
 	<-sig
 	if mitmMgr != nil && mitmMgr.MITMActive() {
 		mitmMgr.StopMITM()
+	}
+	if dnsSpoofer != nil && dnsSpoofer.Active() {
+		dnsSpoofer.Stop()
 	}
 	log.Println("Shutdown.")
 }

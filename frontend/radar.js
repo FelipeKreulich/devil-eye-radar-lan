@@ -34,6 +34,23 @@ let vendorFilter = '';
 const bwHistory = [];   // ring buffer, max 60 entries of {in: float, out: float}
 const BW_MAX    = 60;
 
+// ─── New feature state ────────────────────────────────────────────────────────
+let topoMode      = false;
+let heatmapMode   = false;
+let statsVisible  = false;
+let replayMode    = false;
+let dnspoofVisible = false;
+let spoofActive   = false;
+
+const peerLinks   = new Map();   // "srcIP|dstIP" → {bytes, t}
+const domainCounts = new Map();  // domain → count
+let encCount      = 0;
+let plainCount    = 0;
+
+let replayEvents  = [];
+let replayTimer   = null;
+let replayIdx     = 0;
+
 // ─── Canvas ───────────────────────────────────────────────────────────────────
 const canvas = document.getElementById('radar');
 const ctx    = canvas.getContext('2d');
@@ -184,6 +201,36 @@ function handleEvent(ev) {
         }
       }
       break;
+
+    case 'peer_link':
+      if (ev.peer_links) {
+        const now = Date.now();
+        for (const pair of ev.peer_links) {
+          const key = pair.src_ip + '|' + pair.dst_ip;
+          peerLinks.set(key, { bytes: pair.bytes, t: now });
+        }
+        // Prune entries older than 30 seconds
+        for (const [key, val] of peerLinks) {
+          if (now - val.t > 30000) peerLinks.delete(key);
+        }
+      }
+      break;
+
+    case 'ssl_strip':
+      if (ev.alert) {
+        showToast('danger', ev.alert.message);
+        playBeep(330, 0.3, 'sawtooth');
+        // Add to feed as SSL event
+        addTrafficEvent({
+          time: new Date().toISOString(),
+          proto: 'SSL',
+          src_ip: ev.alert.ip || '',
+          domain: ev.alert.message,
+          threat: true,
+          threat_msg: 'SSL Strip detected',
+        });
+      }
+      break;
   }
 }
 
@@ -290,6 +337,9 @@ function vendorPrefix(ip) {
 
 // ─── Physics ──────────────────────────────────────────────────────────────────
 function applyForces() {
+  // In topology mode, positions are fixed — skip all physics
+  if (topoMode) return;
+
   const ips = [...nodes.keys()];
   const cx  = canvas.width  / 2;
   const cy  = canvas.height / 2;
@@ -368,6 +418,409 @@ function findGatewayNode() {
     if (dev.is_gateway) return nodes.get(ip);
   }
   return null;
+}
+
+// ─── Topology mode ────────────────────────────────────────────────────────────
+function toggleTopoMode() {
+  topoMode = !topoMode;
+  document.getElementById('topo-btn').classList.toggle('mode-active', topoMode);
+  if (topoMode) positionTopoNodes();
+}
+
+function positionTopoNodes() {
+  const cx = canvas.width  / 2;
+  const cy = canvas.height / 2;
+
+  // Group nodes by topo_layer (default to layer 1 if not set, gateway = layer 0)
+  const layers = { 0: [], 1: [], 2: [] };
+  for (const [ip, dev] of devices) {
+    if (!nodes.has(ip)) continue;
+    let layer = dev.topo_layer != null ? dev.topo_layer : (dev.is_gateway ? 0 : 1);
+    if (layer < 0 || layer > 2) layer = 1;
+    layers[layer].push(ip);
+  }
+
+  // Layer 0 — gateway: pin to center
+  for (const ip of layers[0]) {
+    const n = nodes.get(ip);
+    if (!n) continue;
+    n.x = cx; n.y = cy;
+    n.vx = 0; n.vy = 0;
+  }
+
+  // Layer 1 — ring at radius 140
+  const r1 = 140;
+  layers[1].forEach((ip, idx) => {
+    const n = nodes.get(ip);
+    if (!n) return;
+    const angle = (idx / Math.max(layers[1].length, 1)) * Math.PI * 2;
+    n.x = cx + Math.cos(angle) * r1;
+    n.y = cy + Math.sin(angle) * r1;
+    n.vx = 0; n.vy = 0;
+  });
+
+  // Layer 2 — ring at radius 260
+  const r2 = 260;
+  layers[2].forEach((ip, idx) => {
+    const n = nodes.get(ip);
+    if (!n) return;
+    const angle = (idx / Math.max(layers[2].length, 1)) * Math.PI * 2;
+    n.x = cx + Math.cos(angle) * r2;
+    n.y = cy + Math.sin(angle) * r2;
+    n.vx = 0; n.vy = 0;
+  });
+}
+
+// ─── Heatmap ──────────────────────────────────────────────────────────────────
+function toggleHeatmap() {
+  heatmapMode = !heatmapMode;
+  document.getElementById('heat-btn').classList.toggle('mode-active', heatmapMode);
+}
+
+function drawHeatmap() {
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+
+  for (const [ip, n] of nodes) {
+    if (!isVisible(ip)) continue;
+    const dev = devices.get(ip);
+    if (!dev || !dev.active) continue;
+
+    const rate   = (dev.rate_in || 0) + (dev.rate_out || 0);
+    const radius = 80 + rate * 0.00001;
+
+    const isRed  = !!dev.threat;
+    const grad = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, radius);
+    if (isRed) {
+      grad.addColorStop(0,   'rgba(255,32,32,0.14)');
+      grad.addColorStop(1,   'rgba(255,32,32,0)');
+    } else {
+      grad.addColorStop(0,   'rgba(0,255,65,0.12)');
+      grad.addColorStop(1,   'rgba(0,255,65,0)');
+    }
+
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, radius, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+// ─── Peer links ───────────────────────────────────────────────────────────────
+function drawPeerLinks() {
+  if (peerLinks.size === 0) return;
+
+  ctx.save();
+  ctx.setLineDash([4, 4]);
+  ctx.lineWidth   = 0.8;
+  ctx.strokeStyle = 'rgba(0,212,255,0.2)';
+
+  for (const [key] of peerLinks) {
+    const parts  = key.split('|');
+    const srcIP  = parts[0];
+    const dstIP  = parts[1];
+    if (!nodes.has(srcIP) || !nodes.has(dstIP)) continue;
+    if (!isVisible(srcIP) || !isVisible(dstIP)) continue;
+    const a = nodes.get(srcIP);
+    const b = nodes.get(dstIP);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  }
+
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+// ─── Statistics ───────────────────────────────────────────────────────────────
+function toggleStats() {
+  statsVisible = !statsVisible;
+  document.getElementById('stats-panel').classList.toggle('hidden', !statsVisible);
+  document.getElementById('stats-btn').classList.toggle('mode-active', statsVisible);
+  if (statsVisible) updateStats();
+}
+
+function updateStats() {
+  let activeCount  = 0;
+  let totalBytesIn = 0;
+  let totalBytesOut = 0;
+
+  const bwRanked = [];
+
+  for (const [, dev] of devices) {
+    if (dev.active) activeCount++;
+    totalBytesIn  += dev.bytes_in  || 0;
+    totalBytesOut += dev.bytes_out || 0;
+    const rate = (dev.rate_in || 0) + (dev.rate_out || 0);
+    bwRanked.push({ ip: dev.ip, rate });
+  }
+
+  bwRanked.sort((a, b) => b.rate - a.rate);
+  const top3bw = bwRanked.slice(0, 3);
+
+  const topDomains = [...domainCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+
+  const totalEnc  = encCount + plainCount;
+  const encPct    = totalEnc > 0 ? ((encCount / totalEnc) * 100).toFixed(1) : '0.0';
+  const totalBytes = totalBytesIn + totalBytesOut;
+
+  const html = `
+<div class="stat-section">
+  <span class="stat-title">DEVICES</span>
+  <div class="stat-row"><span class="stat-label">Total seen</span><span class="stat-val">${devices.size}</span></div>
+  <div class="stat-row"><span class="stat-label">Active now</span><span class="stat-val">${activeCount}</span></div>
+  <div class="stat-row"><span class="stat-label">Traffic events</span><span class="stat-val">${feedCount}</span></div>
+</div>
+<div class="stat-section">
+  <span class="stat-title">TOP DOMAINS</span>
+  ${topDomains.length > 0
+    ? topDomains.map(([d, c]) => `<div class="stat-row"><span class="stat-label">${escHtml(d)}</span><span class="stat-val cyan">${c}</span></div>`).join('')
+    : '<div class="stat-row"><span class="stat-label" style="font-style:italic">no data yet</span></div>'
+  }
+</div>
+<div class="stat-section">
+  <span class="stat-title">TOP BANDWIDTH</span>
+  ${top3bw.length > 0
+    ? top3bw.map((entry) => `<div class="stat-row"><span class="stat-label">${escHtml(entry.ip)}</span><span class="stat-val yellow">${formatBW(entry.rate)}</span></div>`).join('')
+    : '<div class="stat-row"><span class="stat-label" style="font-style:italic">no data yet</span></div>'
+  }
+</div>
+<div class="stat-section">
+  <span class="stat-title">ENCRYPTION</span>
+  <div class="stat-row"><span class="stat-label">Encrypted (HTTPS)</span><span class="stat-val">${encCount}</span></div>
+  <div class="stat-row"><span class="stat-label">Plaintext (HTTP)</span><span class="stat-val red">${plainCount}</span></div>
+  <div class="stat-row"><span class="stat-label">Enc. ratio</span><span class="stat-val">${encPct}%</span></div>
+  <div class="stat-row"><span class="stat-label">Total bytes tracked</span><span class="stat-val cyan">${formatBW(totalBytes / 60)}</span></div>
+</div>`;
+
+  document.getElementById('stats-body').innerHTML = html;
+}
+
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// ─── Session replay ───────────────────────────────────────────────────────────
+function toggleReplay() {
+  replayMode = !replayMode;
+  document.getElementById('replay-panel').classList.toggle('hidden', !replayMode);
+  document.getElementById('replay-btn').classList.toggle('mode-active', replayMode);
+  if (replayMode) loadSessionDates();
+}
+
+function loadSessionDates() {
+  fetch('/api/sessions')
+    .then((r) => r.json())
+    .then((dates) => {
+      const sel = document.getElementById('replay-date');
+      // Keep first placeholder option
+      while (sel.options.length > 1) sel.remove(1);
+      if (Array.isArray(dates)) {
+        for (const d of dates) {
+          const opt = document.createElement('option');
+          opt.value = d;
+          opt.textContent = d;
+          sel.appendChild(opt);
+        }
+      }
+    })
+    .catch(() => {
+      document.getElementById('replay-status').textContent = 'No session data available.';
+    });
+}
+
+function loadReplaySession() {
+  const sel  = document.getElementById('replay-date');
+  const date = sel.value;
+  if (!date) return;
+
+  document.getElementById('replay-status').textContent = 'Loading...';
+
+  fetch('/api/sessions/' + encodeURIComponent(date))
+    .then((r) => r.text())
+    .then((text) => {
+      replayEvents = [];
+      const lines = text.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const ev = JSON.parse(trimmed);
+          replayEvents.push(ev);
+        } catch (_) {}
+      }
+      replayEvents.sort((a, b) => {
+        const ta = a.time ? new Date(a.time).getTime() : 0;
+        const tb = b.time ? new Date(b.time).getTime() : 0;
+        return ta - tb;
+      });
+      replayIdx = 0;
+      document.getElementById('replay-controls').style.display = '';
+      document.getElementById('replay-status').textContent =
+        replayEvents.length + ' events loaded';
+    })
+    .catch((e) => {
+      document.getElementById('replay-status').textContent = 'Load error: ' + e.message;
+    });
+}
+
+function playReplay() {
+  if (replayEvents.length === 0) return;
+  if (replayTimer) return; // already playing
+
+  const btn   = document.getElementById('replay-play-btn');
+  btn.textContent = '⏸ PAUSE';
+
+  const speed = parseFloat(document.getElementById('replay-speed').value) || 1;
+
+  // Clear the current scene
+  devices.clear();
+  nodes.clear();
+  replayIdx = 0;
+
+  const firstT = replayEvents[0].time ? new Date(replayEvents[0].time).getTime() : 0;
+  const wallStart = Date.now();
+
+  function dispatchNext() {
+    if (replayIdx >= replayEvents.length) {
+      stopReplay();
+      document.getElementById('replay-status').textContent = 'Replay complete.';
+      return;
+    }
+
+    const ev   = replayEvents[replayIdx];
+    const evT  = ev.time ? new Date(ev.time).getTime() : firstT;
+    const delay = Math.max(0, (evT - firstT) / speed - (Date.now() - wallStart));
+
+    replayTimer = setTimeout(() => {
+      // Dispatch the replay event
+      if (ev.type === 'device_found' || ev.type === 'device_updated') {
+        const dev = ev.device || {
+          ip: ev.ip,
+          mac: ev.mac,
+          vendor: ev.vendor,
+          hostname: ev.hostname,
+          active: true,
+          first_seen: ev.time,
+          last_seen: ev.time,
+        };
+        addOrUpdate(dev);
+        if (ev.type === 'device_found') flash(dev.ip, GREEN);
+      } else if (ev.type === 'device_lost') {
+        const ip = ev.device ? ev.device.ip : ev.ip;
+        if (ip && devices.has(ip)) {
+          const d = devices.get(ip);
+          d.active = false;
+          devices.set(ip, d);
+        }
+      } else if (ev.type === 'alert') {
+        if (ev.alert) showToast(ev.alert.level || 'info', ev.alert.message);
+      } else if (ev.type === 'traffic') {
+        if (ev.traffic) addTrafficEvent(ev.traffic);
+      }
+
+      document.getElementById('replay-status').textContent =
+        'Playing ' + (replayIdx + 1) + ' / ' + replayEvents.length;
+
+      replayIdx++;
+      dispatchNext();
+    }, delay);
+  }
+
+  dispatchNext();
+}
+
+function stopReplay() {
+  if (replayTimer) {
+    clearTimeout(replayTimer);
+    replayTimer = null;
+  }
+  const btn = document.getElementById('replay-play-btn');
+  if (btn) btn.textContent = '▶ PLAY';
+}
+
+// ─── DNS Spoof panel ──────────────────────────────────────────────────────────
+function toggleDNSSpoof() {
+  dnspoofVisible = !dnspoofVisible;
+  document.getElementById('spoof-panel').classList.toggle('hidden', !dnspoofVisible);
+  document.getElementById('spoof-btn').classList.toggle('mode-active', dnspoofVisible);
+  if (dnspoofVisible) loadSpoofStatus();
+}
+
+function loadSpoofStatus() {
+  fetch('/api/dnsspoof/status')
+    .then((r) => r.json())
+    .then((data) => {
+      spoofActive = !!data.active;
+      const statusEl = document.getElementById('spoof-status');
+      const btnEl    = document.getElementById('spoof-toggle-btn');
+      statusEl.textContent = spoofActive ? 'ACTIVE' : 'INACTIVE';
+      statusEl.style.color  = spoofActive ? '#00ff41' : '#007a20';
+      btnEl.textContent     = spoofActive ? 'DISABLE' : 'ENABLE';
+      renderSpoofRules(data.rules || []);
+    })
+    .catch(() => {
+      document.getElementById('spoof-status').textContent = 'unavailable';
+    });
+}
+
+function toggleSpoofActive() {
+  const endpoint = spoofActive ? '/api/dnsspoof/off' : '/api/dnsspoof/on';
+  fetch(endpoint, { method: 'POST' })
+    .then(() => loadSpoofStatus())
+    .catch((e) => showToast('danger', 'Spoof toggle error: ' + e.message));
+}
+
+function addSpoofRule() {
+  const domain = document.getElementById('spoof-domain').value.trim();
+  const ip     = document.getElementById('spoof-ip').value.trim();
+  if (!domain || !ip) return;
+
+  fetch('/api/dnsspoof/rules', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ domain, ip }),
+  })
+    .then(() => {
+      document.getElementById('spoof-domain').value = '';
+      document.getElementById('spoof-ip').value = '';
+      loadSpoofStatus();
+    })
+    .catch((e) => showToast('danger', 'Add rule error: ' + e.message));
+}
+
+function removeSpoofRule(domain) {
+  fetch('/api/dnsspoof/rules', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ domain }),
+  })
+    .then(() => loadSpoofStatus())
+    .catch((e) => showToast('danger', 'Remove rule error: ' + e.message));
+}
+
+function renderSpoofRules(rules) {
+  const el = document.getElementById('spoof-rules');
+  if (!rules || rules.length === 0) {
+    el.innerHTML = '<div style="color:#003d15;font-size:10px;padding:6px 0">no rules defined</div>';
+    return;
+  }
+  el.innerHTML = rules.map((r) => `
+    <div class="spoof-rule">
+      <span class="spoof-rule-domain">${escHtml(r.domain)}</span>
+      <span class="spoof-rule-ip">${escHtml(r.ip)}</span>
+      <button class="spoof-rule-del" onclick="removeSpoofRule('${escHtml(r.domain)}')">DEL</button>
+    </div>
+  `).join('');
 }
 
 // ─── Visibility filter ────────────────────────────────────────────────────────
@@ -716,8 +1169,10 @@ function frame() {
 
   drawGrid();
   drawSweep();
-  applyForces();
+  if (!topoMode) applyForces();
+  if (heatmapMode) drawHeatmap();
   drawEdges();
+  drawPeerLinks();
   drawNodes();
   drawBWChart();
 }
@@ -854,6 +1309,34 @@ function renderDossier(dev) {
     sparkCanvas.parentElement.style.display = 'none';
   }
 
+  // CVEs
+  const cveSection = document.getElementById('cve-section');
+  const cvesEl     = document.getElementById('d-cves');
+  if (dev.cves && dev.cves.length > 0) {
+    cveSection.style.display = '';
+    cvesEl.innerHTML = dev.cves.map((cve) => {
+      const sev = (cve.severity || 'LOW').toUpperCase();
+      return `<div class="cve-entry">
+        <span class="cve-sev ${sev}">${escHtml(sev)}</span>
+        <span class="cve-id">${escHtml(cve.id || '')}</span>
+        <span class="cve-desc">${escHtml(cve.description || cve.desc || '')}</span>
+      </div>`;
+    }).join('');
+  } else {
+    cveSection.style.display = 'none';
+    cvesEl.innerHTML = '';
+  }
+
+  // Device type
+  const deviceTypeField = document.getElementById('device-type-field');
+  const deviceTypeEl    = document.getElementById('d-device-type');
+  if (dev.device_type) {
+    deviceTypeField.style.display = '';
+    deviceTypeEl.textContent = dev.device_type;
+  } else {
+    deviceTypeField.style.display = 'none';
+  }
+
   // Open ports
   const portsEl = document.getElementById('d-ports');
   portsEl.innerHTML = '';
@@ -956,6 +1439,18 @@ function addTrafficEvent(ev) {
   feedAll.unshift(ev);
   if (feedAll.length > FEED_MAX) feedAll.pop();
   document.getElementById('feed-count').textContent = feedCount;
+
+  // Track domain counts
+  if (ev.domain) {
+    domainCounts.set(ev.domain, (domainCounts.get(ev.domain) || 0) + 1);
+  }
+
+  // Track encryption ratio
+  if (ev.proto === 'HTTPS') {
+    encCount++;
+  } else if (ev.proto === 'HTTP') {
+    plainCount++;
+  }
 
   if (feedFilter === 'ALL' || ev.proto === feedFilter) {
     prependFeedRow(ev);

@@ -346,7 +346,7 @@ main {
 /* ─── Activity Feed ────────────────────────────────────────────────────────── */
 #feed {
   position: absolute;
-  bottom: 28px;
+  bottom: 56px;
   left: 0;
   width: 480px;
   background: rgba(5, 10, 5, 0.97);
@@ -563,3 +563,102 @@ main {
 
 /* ─── Pin indicator ─────────────────────────────────────────────────────────── */
 /* rendered on canvas — no extra CSS needed */
+
+/* ─── Floating panels (stats, replay, spoof) ─────────────────────────────── */
+#stats-panel, #replay-panel, #spoof-panel {
+  position: absolute;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 420px;
+  background: rgba(5,10,5,0.97);
+  border: 1px solid var(--green);
+  box-shadow: 0 0 24px rgba(0,255,65,0.25);
+  z-index: 150;
+  transition: opacity 0.2s, transform 0.2s;
+}
+#stats-panel.hidden, #replay-panel.hidden, #spoof-panel.hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(-10px);
+}
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0,255,65,0.07);
+  font-size: 11px;
+  letter-spacing: 3px;
+  color: var(--green);
+}
+.panel-header button {
+  background: none; border: 1px solid var(--border); color: var(--text-dim);
+  cursor: pointer; font-size: 12px; width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+}
+.panel-header button:hover { border-color: var(--red); color: var(--red); }
+
+#stats-body, #replay-body, #spoof-body { padding: 12px 14px; }
+
+.stat-section { margin-bottom: 14px; }
+.stat-section > .stat-title {
+  font-size: 9px; letter-spacing: 2px; color: var(--text-dim);
+  display: block; margin-bottom: 6px; border-bottom: 1px solid var(--border); padding-bottom: 4px;
+}
+.stat-row {
+  display: flex; justify-content: space-between;
+  font-size: 11px; padding: 3px 0; border-bottom: 1px solid rgba(0,255,65,0.04);
+}
+.stat-label { color: var(--text-dim); }
+.stat-val   { color: var(--green); }
+.stat-val.cyan   { color: var(--cyan); }
+.stat-val.yellow { color: var(--yellow); }
+.stat-val.red    { color: var(--red); }
+
+.replay-row { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+#replay-date, #replay-speed, #spoof-domain, #spoof-ip {
+  background: transparent; border: 1px solid var(--border); color: var(--green);
+  font-family: 'Courier New', monospace; font-size: 10px; padding: 3px 7px; outline: none;
+}
+#replay-date:focus, #replay-speed:focus, #spoof-domain:focus, #spoof-ip:focus {
+  border-color: var(--green);
+}
+
+.spoof-rule {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 4px 0; border-bottom: 1px solid rgba(0,255,65,0.06); font-size: 11px;
+}
+.spoof-rule-domain { color: var(--yellow); }
+.spoof-rule-ip     { color: var(--cyan); }
+.spoof-rule-del    {
+  background: none; border: 1px solid rgba(255,32,32,0.3); color: var(--red);
+  font-size: 9px; padding: 1px 5px; cursor: pointer;
+}
+
+/* ─── CVE badges in dossier ─────────────────────────────────────────────────── */
+#cve-section { margin-top: 8px; margin-bottom: 10px; }
+#cve-section > label {
+  font-size: 9px; letter-spacing: 2px; color: var(--text-dim); display: block; margin-bottom: 6px;
+}
+#d-cves { display: flex; flex-direction: column; gap: 4px; }
+.cve-entry {
+  display: flex; gap: 6px; align-items: flex-start;
+  font-size: 10px; padding: 3px 0; border-bottom: 1px solid rgba(0,255,65,0.05);
+}
+.cve-sev {
+  font-size: 8px; letter-spacing: 1px; padding: 1px 4px; border: 1px solid; flex-shrink: 0;
+}
+.cve-sev.CRITICAL { color: var(--red);    border-color: rgba(255,32,32,0.5);  background: rgba(255,32,32,0.07); }
+.cve-sev.HIGH     { color: #ff8800;       border-color: rgba(255,136,0,0.5);  background: rgba(255,136,0,0.07); }
+.cve-sev.MEDIUM   { color: var(--yellow); border-color: rgba(255,215,0,0.5);  background: rgba(255,215,0,0.07); }
+.cve-sev.LOW      { color: var(--cyan);   border-color: rgba(0,212,255,0.5);  background: rgba(0,212,255,0.07); }
+.cve-id   { color: var(--text-dim); font-size: 9px; flex-shrink: 0; }
+.cve-desc { color: #00aa28; flex: 1; }
+
+/* ─── Toolbar active states for mode buttons ─────────────────────────────── */
+.tbtn.mode-active { border-color: var(--cyan); color: var(--cyan); background: rgba(0,212,255,0.08); }
+
+/* ─── Peer link edges (drawn on canvas, no CSS needed, but add feed badge) ── */
+.fbadge.ssl  { color: var(--red); border-color: rgba(255,32,32,0.4); background: rgba(255,32,32,0.07); }

@@ -13,6 +13,12 @@ type TimelineEntry struct {
 	Event string    `json:"event"` // "online" | "offline"
 }
 
+type CVEEntry struct {
+	ID       string `json:"id"`
+	Severity string `json:"severity"` // CRITICAL, HIGH, MEDIUM, LOW
+	Desc     string `json:"desc"`
+}
+
 type Device struct {
 	IP          string         `json:"ip"`
 	MAC         string         `json:"mac"`
@@ -34,6 +40,10 @@ type Device struct {
 	RateOut     float64        `json:"rate_out"`
 	Timeline    []TimelineEntry `json:"timeline,omitempty"`
 	PingHistory []int           `json:"ping_history,omitempty"`
+	DeviceType  string         `json:"device_type,omitempty"`
+	TopoLayer   int            `json:"topo_layer"`
+	CVEs        []CVEEntry     `json:"cves,omitempty"`
+	PeerLinks   []string       `json:"peer_links,omitempty"`
 }
 
 type TrafficEvent struct {
@@ -76,7 +86,15 @@ const (
 	EventMITMStatus    EventType = "mitm_status"
 	EventProbeDevice   EventType = "probe_device"
 	EventPassiveOS     EventType = "passive_os"
+	EventPeerLink      EventType = "peer_link"
+	EventSSLStrip      EventType = "ssl_strip"
 )
+
+type PeerLinkPair struct {
+	SrcIP string `json:"src_ip"`
+	DstIP string `json:"dst_ip"`
+	Bytes int64  `json:"bytes"`
+}
 
 type OSHint struct {
 	IP string `json:"ip"`
@@ -93,4 +111,5 @@ type Event struct {
 	Alert     *AlertEvent    `json:"alert,omitempty"`
 	MITMOn    *bool          `json:"mitm_on,omitempty"`
 	OSHints   []OSHint       `json:"os_hints,omitempty"`
+	PeerLinks []PeerLinkPair `json:"peer_links,omitempty"`
 }

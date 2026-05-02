@@ -102,6 +102,13 @@ type Sniffer struct {
 
 	osMu    sync.Mutex
 	osCache map[string]string // ip → last emitted OS
+
+	peerMu    sync.Mutex
+	peerLinks map[string]map[string]int64 // srcIP → dstIP → bytes
+	peerTick  time.Time
+
+	sslMu    sync.RWMutex
+	httpsSet map[string]map[string]bool // srcIP → set of HTTPS hosts seen
 }
 
 // buildOwnIPs returns a set of IPv4 addresses belonging to the given interface.
@@ -132,6 +139,9 @@ func New(iface *net.Interface, events chan<- api.Event) *Sniffer {
 		scanTrack: make(map[string]map[uint16]time.Time),
 		ownIPs:    buildOwnIPs(iface),
 		osCache:   make(map[string]string),
+		peerLinks: make(map[string]map[string]int64),
+		peerTick:  time.Now(),
+		httpsSet:  make(map[string]map[string]bool),
 	}
 	go s.cleanupLoop()
 	go s.bwLoop()
@@ -189,6 +199,11 @@ func (s *Sniffer) processFrame(frame []byte) {
 	s.bw.record(srcIP, true, totalLen)
 	s.bw.record(dstIP, false, totalLen)
 
+	// Track LAN-to-LAN communication
+	if isPrivateIP(srcIP) && isPrivateIP(dstIP) && srcIP != dstIP {
+		s.trackPeer(srcIP, dstIP, int64(totalLen))
+	}
+
 	s.inferOS(srcIP, ip)
 
 	switch ip[9] {
@@ -209,6 +224,9 @@ func (s *Sniffer) handleUDP(srcIP, dstIP string, seg []byte) {
 	dp := binary.BigEndian.Uint16(seg[2:4])
 	if sp == 53 || dp == 53 {
 		s.parseDNS(srcIP, dstIP, seg[8:])
+	}
+	if (sp == 67 || sp == 68) && (dp == 67 || dp == 68) {
+		s.checkRogueDHCP(srcIP, seg[8:])
 	}
 }
 
@@ -270,6 +288,12 @@ func (s *Sniffer) handleTCP(srcIP, dstIP string, seg []byte) {
 	switch {
 	case dp == 443 || sp == 443 || dp == 8443 || sp == 8443:
 		if sni := parseTLSSNI(payload); sni != "" {
+			s.sslMu.Lock()
+			if s.httpsSet[srcIP] == nil {
+				s.httpsSet[srcIP] = make(map[string]bool)
+			}
+			s.httpsSet[srcIP][sni] = true
+			s.sslMu.Unlock()
 			key := "tls:" + dstIP + ":" + sni
 			if s.dedup(key, 30*time.Second) {
 				ev := s.buildTraffic(srcIP, dstIP, "HTTPS", sni, "")
@@ -278,6 +302,18 @@ func (s *Sniffer) handleTCP(srcIP, dstIP string, seg []byte) {
 		}
 	case dp == 80 || sp == 80 || dp == 8080 || sp == 8080:
 		if host := parseHTTPHost(payload); host != "" {
+			s.sslMu.RLock()
+			_, wasHTTPS := s.httpsSet[srcIP][host]
+			s.sslMu.RUnlock()
+			if wasHTTPS {
+				if s.dedup("sslstrip:"+srcIP+":"+host, 60*time.Second) {
+					s.emit(api.Event{Type: api.EventSSLStrip, Alert: &api.AlertEvent{
+						Level:   "danger",
+						Message: "⚠ SSL STRIP: " + srcIP + " acessando " + host + " via HTTP (antes era HTTPS)",
+						IP:      srcIP,
+					}})
+				}
+			}
 			key := "http:" + dstIP + ":" + host
 			if s.dedup(key, 30*time.Second) {
 				ev := s.buildTraffic(srcIP, dstIP, "HTTP", host, "")
@@ -507,5 +543,103 @@ func (s *Sniffer) emit(ev api.Event) {
 	select {
 	case s.events <- ev:
 	default:
+	}
+}
+
+// ─── Private IP helper ────────────────────────────────────────────────────────
+
+var (
+	privateRanges = []net.IPNet{
+		{IP: net.ParseIP("10.0.0.0"), Mask: net.CIDRMask(8, 32)},
+		{IP: net.ParseIP("172.16.0.0"), Mask: net.CIDRMask(12, 32)},
+		{IP: net.ParseIP("192.168.0.0"), Mask: net.CIDRMask(16, 32)},
+	}
+)
+
+func isPrivateIP(ipStr string) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return false
+	}
+	for _, r := range privateRanges {
+		if r.Contains(ip4) {
+			return true
+		}
+	}
+	return false
+}
+
+// ─── Peer link tracker ────────────────────────────────────────────────────────
+
+func (s *Sniffer) trackPeer(srcIP, dstIP string, bytes int64) {
+	s.peerMu.Lock()
+	if s.peerLinks[srcIP] == nil {
+		s.peerLinks[srcIP] = make(map[string]int64)
+	}
+	s.peerLinks[srcIP][dstIP] += bytes
+	flush := time.Since(s.peerTick) > 10*time.Second
+	if flush {
+		var pairs []api.PeerLinkPair
+		for src, dsts := range s.peerLinks {
+			for dst, b := range dsts {
+				pairs = append(pairs, api.PeerLinkPair{SrcIP: src, DstIP: dst, Bytes: b})
+			}
+		}
+		s.peerLinks = make(map[string]map[string]int64)
+		s.peerTick = time.Now()
+		s.peerMu.Unlock()
+		if len(pairs) > 0 {
+			s.emit(api.Event{Type: api.EventPeerLink, PeerLinks: pairs})
+		}
+		return
+	}
+	s.peerMu.Unlock()
+}
+
+// ─── Rogue DHCP detection ─────────────────────────────────────────────────────
+
+func (s *Sniffer) checkRogueDHCP(srcIP string, data []byte) {
+	if len(data) < 240 {
+		return
+	}
+	// Check DHCP magic cookie at offset 236
+	if data[236] != 99 || data[237] != 130 || data[238] != 83 || data[239] != 99 {
+		return
+	}
+	// Parse options looking for option 53 (DHCP message type)
+	i := 240
+	for i < len(data)-1 {
+		opt := data[i]
+		if opt == 255 {
+			break
+		} // END
+		if opt == 0 {
+			i++
+			continue
+		} // PAD
+		if i+1 >= len(data) {
+			break
+		}
+		ln := int(data[i+1])
+		if i+2+ln > len(data) {
+			break
+		}
+		if opt == 53 && ln == 1 {
+			msgType := data[i+2]
+			if msgType == 2 || msgType == 5 { // OFFER or ACK
+				if s.dedup("dhcp:"+srcIP, 60*time.Second) {
+					s.emit(api.Event{Type: api.EventAlert, Alert: &api.AlertEvent{
+						Level:   "danger",
+						Message: "⚠ ROGUE DHCP: servidor DHCP não autorizado em " + srcIP,
+						IP:      srcIP,
+					}})
+				}
+			}
+		}
+		i += 2 + ln
 	}
 }

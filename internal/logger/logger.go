@@ -39,16 +39,22 @@ func (l *Logger) Log(ev api.Event) {
 		return
 	}
 	entry := struct {
-		Time time.Time     `json:"time"`
-		Type api.EventType `json:"type"`
-		IP   string        `json:"ip,omitempty"`
-		Msg  string        `json:"msg,omitempty"`
+		Time     time.Time     `json:"time"`
+		Type     api.EventType `json:"type"`
+		IP       string        `json:"ip,omitempty"`
+		MAC      string        `json:"mac,omitempty"`
+		Vendor   string        `json:"vendor,omitempty"`
+		Hostname string        `json:"hostname,omitempty"`
+		Msg      string        `json:"msg,omitempty"`
 	}{
 		Time: now,
 		Type: ev.Type,
 	}
 	if ev.Device != nil {
-		entry.IP = ev.Device.IP
+		entry.IP       = ev.Device.IP
+		entry.MAC      = ev.Device.MAC
+		entry.Vendor   = ev.Device.Vendor
+		entry.Hostname = ev.Device.Hostname
 	}
 	if ev.Alert != nil {
 		entry.Msg = ev.Alert.Message
