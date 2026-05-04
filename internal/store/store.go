@@ -24,8 +24,9 @@ type data struct {
 }
 
 type Store struct {
-	mu sync.RWMutex
-	d  data
+	mu     sync.RWMutex
+	saveMu sync.Mutex // serializes concurrent file writes
+	d      data
 }
 
 func New() *Store {
@@ -104,8 +105,14 @@ func (s *Store) save() {
 	if err != nil {
 		return
 	}
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
 	os.MkdirAll("data", 0700)
-	os.WriteFile(savePath, b, 0600)
+	// Write to a temp file then rename for atomic update (prevents corrupt JSON on crash).
+	tmp := savePath + ".tmp"
+	if err := os.WriteFile(tmp, b, 0600); err == nil {
+		os.Rename(tmp, savePath)
+	}
 }
 
 func (s *Store) autoSave() {

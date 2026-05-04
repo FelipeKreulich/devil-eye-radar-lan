@@ -40,18 +40,21 @@ Probe   ──┘                                              │
 **`internal/api`** — HTTP + WebSocket server (`server.go`) + type definitions (`types.go`).
 - `Hub` owns device map + broadcast loop. Serves frontend at `/`, WebSocket at `/ws`.
 - Interfaces: `MITMController`, `DNSSpoofController`, `EventLogger`.
-- REST endpoints: `/api/devices`, `/api/mitm/on|off`, `/api/export`, `/api/sessions`, `/api/sessions/{date}`, `/api/dnsspoof/status|on|off|rules`.
+- REST endpoints: `/api/devices`, `/api/mitm/on|off`, `/api/block` (GET/POST), `/api/unblock` (POST), `/api/label` (POST), `/api/export`, `/api/sessions`, `/api/sessions/{date}`, `/api/dnsspoof/status|on|off|rules`.
 - `sendFullState` on new WebSocket connection: all devices + recent traffic + MITM state.
+- `Hub.SetLabelStore(LabelSetter)` wires the store for label persistence.
 
 **`internal/scanner`** — Network discovery.
-- `scanner.go`: ARP + mDNS in parallel every 15s. `enrich()` per new device: ping + port scan + CVE matching + TopoLayer assignment. `pingLoop()` re-pings all active hosts every 10s (PingHistory, max 20 entries). ARP spoof detection (MAC change for known IP → danger alert).
+- `scanner.go`: ARP + mDNS in parallel every 15s. `enrich()` per new device: ping + port scan + CVE matching + SSL cert inspection + TopoLayer assignment + `inferDeviceType()`. `pingLoop()` re-pings all active hosts every 10s (PingHistory, max 20 entries). ARP spoof detection (MAC change for known IP → danger alert). `SetLabel()` for persistent device naming.
+- `ssl.go`: `CheckSSL(ip, services)` — connects to ports 443/8443/4443 with `InsecureSkipVerify` (intentional, to inspect broken certs). Returns `[]SSLCertInfo` with CN, issuer, expiry, `DaysLeft`, `SelfSigned`, `Valid`.
 - `arp.go`: ARP scan via `mdlayher/arp`.
 - `ping.go`: wraps `ping` binary; parses TTL (OS guess) + RTT (ms).
 - `portscan.go`: ~30 ports, 50 concurrent goroutines, banner grabbing.
 - `mdns.go`: mDNS query; parses PTR/SRV/A records; maps service types to device types (22 entries: `_airplay._tcp` → "Apple TV", etc.).
 
-**`internal/sniffer`** — Raw AF_PACKET packet capture.
+**`internal/sniffer`** — Raw AF_PACKET packet capture (promiscuous mode via `unix.PACKET_MR_PROMISC` so MITM-forwarded traffic is visible).
 - DNS (miekg/dns), HTTPS TLS SNI, HTTP Host parsing.
+- Geo: `buildTraffic()` uses `geo.LookupCached()` synchronously (no latency); fires `go geo.Lookup()` async on cache miss to warm for next call. Sets `Country`, `CountryCode`, `Flag` on `TrafficEvent`.
 - Bandwidth: 1s sliding window per IP, `EventBandwidth` every second.
 - Passive OS fingerprinting: TCP window + TTL → `EventPassiveOS` (deduplicated).
 - Port scan detection: SYN-only packets to own IPs; >10 unique ports/src in 5s → alert.
@@ -59,7 +62,7 @@ Probe   ──┘                                              │
 - DHCP rogue detection: DHCP OFFER/ACK from non-gateway → danger alert.
 - SSL stripping detection: HTTP access to domain previously seen via HTTPS → `EventSSLStrip`.
 
-**`internal/mitm`** — ARP poisoning via `mdlayher/arp`. 2s poison loop. `restore()` on stop. Manages `/proc/sys/net/ipv4/ip_forward`.
+**`internal/mitm`** — ARP poisoning via `mdlayher/arp`. 2s poison loop. `restore()` on stop. Manages `/proc/sys/net/ipv4/ip_forward`. `BlockDevice(ip, mac)` / `UnblockDevice(ip)` sends dead MAC (`02:00:00:00:00:01`) to isolate a device. Race-free: `gwMACMu` protects gateway MAC; `blockStop` channel created under `mu` and passed by value to goroutine.
 
 **`internal/dnsspoof`** — DNS interception.
 - `Start()`: adds iptables PREROUTING rule redirecting UDP/53 to port 15353 (scoped to LAN interface).
@@ -71,7 +74,7 @@ Probe   ──┘                                              │
 
 **`internal/probe`** — 802.11 monitor mode. `mon0` via `iw`. Parses probe requests (type=0/subtype=4). Gracefully skips if `iw` fails.
 
-**`internal/geo`** — ip-api.com, 24h memory cache, emoji flags, skips private IPs.
+**`internal/geo`** — ip-api.com, 24h memory cache, emoji flags, skips private IPs. `LookupCached(ip)` returns cached result only (no network call) — used by sniffer for the hot path.
 
 **`internal/threat`** — Static bad-domain/IP map (~40 entries). `Check(indicator) (bool, Hit)`.
 
@@ -99,14 +102,19 @@ Single-page Canvas app — no build step, no dependencies. All in `radar.js`.
 7. `drawNodes()` — bandwidth rings, threat glow, vendor labels, topo layers
 8. `drawBWChart()` — 60s history (bottom-right canvas)
 
-**Toolbar buttons:** MITM, EXPORT, ⬡ TOPO, ◉ HEAT, ≡ STATS, ⏪ REPLAY, ⚡ SPOOF.
+**Toolbar buttons:** MITM, EXPORT, ⬡ TOPO, ◉ HEAT, ≡ STATS, ⏪ REPLAY, ⚡ SPOOF, 🌍 MAP.
+
+**Key globals (new):** `blockedIPs` (Set), `externalTraffic` (Map cc→count), `worldMapVisible` bool. `calcHealthScore()` / `updateHealthScore()` run every 5s. `deviceIcon(dev)` returns emoji per type/vendor/OS.
+
+**Traffic particles on edges:** `drawEdges()` — multi-particle system (1–4 dots per edge), speed/count ∝ bandwidth ratio. Blocked devices show red dashed line; no particles.
 
 **Panels (floating, toggleable):**
 - `#stats-panel` — devices, top domains, busiest hosts, enc%, bytes
 - `#replay-panel` — date picker → load JSONL → play/stop/speed
 - `#spoof-panel` — enable/disable DNS spoof, add/remove domain→IP rules
+- `#worldmap-panel` — equirectangular world map canvas (520×260); `CENTROIDS` map (cc→[lon,lat], ~100 countries); dot size = log-scale event count; legend shows top 8 countries. Refreshes on each new external traffic event.
 
-**Dossier panel** fields: IP, MAC, vendor, hostname, OS (active + passive), TTL, country+flag, bandwidth, status, first/last seen, latency sparkline, open ports, CVE badges, device type, timeline.
+**Dossier panel** fields: IP, MAC, vendor, hostname, OS (active + passive), TTL, country+flag, bandwidth, status, first/last seen, latency sparkline, open ports, **SSL certs** (port, CN, issuer, days left, self-signed badge), CVE badges, device type, timeline. Double-click node → `prompt()` → `POST /api/label`. BLOCK button → `POST /api/block` or `/api/unblock`.
 
 ### Event types (`internal/api/types.go`)
 
@@ -126,9 +134,10 @@ Single-page Canvas app — no build step, no dependencies. All in `radar.js`.
 
 ### Device struct fields of note
 
-`DeviceType string` — from mDNS (e.g. "Apple TV", "Chromecast", "Printer").
+`DeviceType string` — from mDNS (e.g. "Apple TV", "Chromecast", "Printer") or `inferDeviceType()` fallback from ports/vendor.
 `TopoLayer int` — 0=gateway, 1=network device (SNMP/BGP ports or OS="Network Device"), 2=end device.
 `CVEs []CVEEntry` — populated by `internal/cve.Match()` after port scan.
+`SSLCerts []SSLCertInfo` — populated by `internal/scanner.CheckSSL()` after port scan.
 `PeerLinks []string` — IPs this device was seen communicating with directly.
 `PingHistory []int` — last 20 RTTs in ms, -1=timeout.
 

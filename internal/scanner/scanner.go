@@ -283,6 +283,9 @@ func (s *Scanner) enrich(dev *api.Device) {
 		}
 	}
 
+	// SSL certificate inspection
+	sslCerts := CheckSSL(dev.IP, services)
+
 	s.mu.Lock()
 	d, ok := s.devices[dev.IP]
 	if ok {
@@ -293,6 +296,10 @@ func (s *Scanner) enrich(dev *api.Device) {
 		d.OpenPorts = services
 		d.TopoLayer = topoLayer
 		d.CVEs = cves
+		d.SSLCerts = sslCerts
+		if d.DeviceType == "" {
+			d.DeviceType = inferDeviceType(services, d.Vendor, d.IsGateway)
+		}
 	}
 	s.mu.Unlock()
 
@@ -335,6 +342,65 @@ func (s *Scanner) SetLabel(ip, label string) {
 		devCopy := *dev
 		s.events <- api.Event{Type: api.EventDeviceUpdated, Device: &devCopy}
 	}
+}
+
+func inferDeviceType(services []api.Service, vendor string, isGateway bool) string {
+	if isGateway {
+		return "Gateway / Router"
+	}
+	ports := make(map[int]bool, len(services))
+	for _, s := range services {
+		ports[s.Port] = true
+	}
+	switch {
+	case ports[3389]:
+		return "Windows PC"
+	case ports[62078]:
+		return "iPhone / iPad"
+	case ports[7000]:
+		return "Apple TV / AirPlay"
+	case ports[554]:
+		return "IP Camera"
+	case ports[9100]:
+		return "Printer"
+	case ports[1883] || ports[8883]:
+		return "IoT Device (MQTT)"
+	case ports[161]:
+		return "Network Device"
+	case ports[445] && ports[139]:
+		return "Windows / NAS"
+	case ports[22] && (ports[80] || ports[443] || ports[8080] || ports[8443]):
+		return "Linux / Server"
+	case ports[22]:
+		return "Linux / Server"
+	case ports[80] || ports[443] || ports[8080] || ports[8443]:
+		return "Web Server"
+	case ports[445]:
+		return "Windows / NAS"
+	case ports[23]:
+		return "Network Device"
+	}
+	v := strings.ToLower(vendor)
+	switch {
+	case strings.Contains(v, "apple"):
+		return "Apple Device"
+	case strings.Contains(v, "samsung"):
+		return "Samsung Device"
+	case strings.Contains(v, "raspberry pi"):
+		return "Linux / Server"
+	case strings.Contains(v, "cisco") || strings.Contains(v, "juniper") ||
+		strings.Contains(v, "mikrotik") || strings.Contains(v, "ubiquiti"):
+		return "Network Device"
+	case strings.Contains(v, "google"):
+		return "Google Device"
+	case strings.Contains(v, "amazon"):
+		return "Amazon Device"
+	case strings.Contains(v, "sony"):
+		return "Sony Device"
+	case strings.Contains(v, "lg ") || strings.Contains(v, "lg,"):
+		return "LG Device"
+	}
+	return ""
 }
 
 func pickInterface() (*net.Interface, error) {

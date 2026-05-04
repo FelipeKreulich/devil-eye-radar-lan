@@ -1,6 +1,7 @@
 package dnsspoof
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"os/exec"
@@ -50,14 +51,24 @@ func (s *Spoofer) Rules() map[string]string {
 	return out
 }
 
+func (s *Spoofer) iptablesArgs(op string) []string {
+	return []string{"-t", "nat", op, "PREROUTING",
+		"-i", s.iface, "-p", "udp", "--dport", "53",
+		"-j", "REDIRECT", "--to-port", listenPort}
+}
+
 func (s *Spoofer) Start() error {
 	if !atomic.CompareAndSwapInt32(&s.active, 0, 1) {
 		return nil
 	}
-	// Redirect all DNS traffic through this machine to our listener
-	exec.Command("iptables", "-t", "nat", "-A", "PREROUTING",
-		"-i", s.iface, "-p", "udp", "--dport", "53",
-		"-j", "REDIRECT", "--to-port", listenPort).Run()
+	// Remove any stale rule from a previous crash before adding a new one.
+	exec.Command("iptables", s.iptablesArgs("-D")...).Run()
+
+	out, err := exec.Command("iptables", s.iptablesArgs("-A")...).CombinedOutput()
+	if err != nil {
+		atomic.StoreInt32(&s.active, 0)
+		return fmt.Errorf("iptables: %v: %s", err, strings.TrimSpace(string(out)))
+	}
 	s.stop = make(chan struct{})
 	go s.listen()
 	log.Printf("DNSSpoof: started on port %s (iface %s)", listenPort, s.iface)
@@ -68,9 +79,9 @@ func (s *Spoofer) Stop() {
 	if !atomic.CompareAndSwapInt32(&s.active, 1, 0) {
 		return
 	}
-	exec.Command("iptables", "-t", "nat", "-D", "PREROUTING",
-		"-i", s.iface, "-p", "udp", "--dport", "53",
-		"-j", "REDIRECT", "--to-port", listenPort).Run()
+	if out, err := exec.Command("iptables", s.iptablesArgs("-D")...).CombinedOutput(); err != nil {
+		log.Printf("DNSSpoof: iptables remove: %v: %s", err, strings.TrimSpace(string(out)))
+	}
 	close(s.stop)
 	log.Println("DNSSpoof: stopped")
 }

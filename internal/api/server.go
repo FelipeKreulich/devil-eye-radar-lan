@@ -21,10 +21,18 @@ type MITMController interface {
 	StartMITM() error
 	StopMITM()
 	MITMActive() bool
+	BlockDevice(ip string, mac net.HardwareAddr)
+	UnblockDevice(ip string)
+	IsBlocked(ip string) bool
+	BlockedIPs() []string
 }
 
 type EventLogger interface {
 	Log(ev Event)
+}
+
+type LabelSetter interface {
+	SetLabel(ip, label string)
 }
 
 type DNSSpoofController interface {
@@ -46,6 +54,7 @@ type Hub struct {
 	mitmCtrl   MITMController
 	logger     EventLogger
 	dnsSpoof   DNSSpoofController
+	labelStore LabelSetter
 }
 
 func NewHub() *Hub {
@@ -62,6 +71,8 @@ func (h *Hub) SetMITMController(m MITMController) { h.mitmCtrl = m }
 func (h *Hub) SetLogger(l EventLogger) { h.logger = l }
 
 func (h *Hub) SetDNSSpoofController(d DNSSpoofController) { h.dnsSpoof = d }
+
+func (h *Hub) SetLabelStore(ls LabelSetter) { h.labelStore = ls }
 
 func (h *Hub) Broadcast(e Event) {
 	h.mu.Lock()
@@ -95,8 +106,10 @@ func (h *Hub) Broadcast(e Event) {
 	if h.logger != nil {
 		h.logger.Log(e)
 	}
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+	// Use full Lock (not RLock) to serialize WebSocket writes — gorilla/websocket
+	// is not safe for concurrent writes on the same connection.
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	for c := range h.clients {
 		c.WriteMessage(websocket.TextMessage, data)
 	}
@@ -132,10 +145,12 @@ func (h *Hub) wsHandler(w http.ResponseWriter, r *http.Request) {
 		log.Println("ws upgrade:", err)
 		return
 	}
+	// Send full state before adding to the broadcast list to avoid a
+	// concurrent-write race between sendFullState and Broadcast.
+	h.sendFullState(conn)
 	h.mu.Lock()
 	h.clients[conn] = true
 	h.mu.Unlock()
-	h.sendFullState(conn)
 	for {
 		if _, _, err := conn.ReadMessage(); err != nil {
 			break
@@ -242,6 +257,94 @@ func (h *Hub) Listen(addr string, staticFS fs.FS) error {
 		}
 		path := "data/sessions/" + date + ".jsonl"
 		http.ServeFile(w, r, path)
+	})
+
+	// Block endpoints
+	mux.HandleFunc("/api/block", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			var blocked []string
+			if h.mitmCtrl != nil {
+				blocked = h.mitmCtrl.BlockedIPs()
+			}
+			if blocked == nil {
+				blocked = []string{}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(blocked)
+		case http.MethodPost:
+			if h.mitmCtrl == nil {
+				http.Error(w, "MITM not available", 503)
+				return
+			}
+			var body struct {
+				IP  string `json:"ip"`
+				MAC string `json:"mac"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.IP == "" {
+				http.Error(w, "bad request", 400)
+				return
+			}
+			mac, err := net.ParseMAC(body.MAC)
+			if err != nil {
+				http.Error(w, "invalid mac", 400)
+				return
+			}
+			h.mitmCtrl.BlockDevice(body.IP, mac)
+			h.Events <- Event{Type: EventAlert, Alert: &AlertEvent{
+				Level:   "danger",
+				Message: "BLOCKED: " + body.IP + " isolado da rede",
+				IP:      body.IP,
+			}}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "use GET or POST", 405)
+		}
+	})
+
+	mux.HandleFunc("/api/unblock", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "use POST", 405)
+			return
+		}
+		if h.mitmCtrl == nil {
+			http.Error(w, "MITM not available", 503)
+			return
+		}
+		var body struct {
+			IP string `json:"ip"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.IP == "" {
+			http.Error(w, "bad request", 400)
+			return
+		}
+		h.mitmCtrl.UnblockDevice(body.IP)
+		h.Events <- Event{Type: EventAlert, Alert: &AlertEvent{
+			Level:   "info",
+			Message: "UNBLOCKED: " + body.IP + " restaurado",
+			IP:      body.IP,
+		}}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// Label endpoint: POST /api/label {ip, label}
+	mux.HandleFunc("/api/label", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "use POST", 405)
+			return
+		}
+		var body struct {
+			IP    string `json:"ip"`
+			Label string `json:"label"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.IP == "" {
+			http.Error(w, "bad request", 400)
+			return
+		}
+		if h.labelStore != nil {
+			h.labelStore.SetLabel(body.IP, body.Label)
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	// DNS spoof endpoints

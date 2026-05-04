@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -50,6 +51,7 @@ func main() {
 	if err != nil {
 		log.Fatal("scanner:", err)
 	}
+	hub.SetLabelStore(sc)
 	// MITM manager
 	var mitmMgr *mitm.MITM
 	if sc.Iface() != nil && sc.Gateway() != nil {
@@ -111,8 +113,12 @@ func (w *mitmWrapper) StartMITM() error {
 	}
 	return w.mgr.StartMITM()
 }
-func (w *mitmWrapper) StopMITM()      { w.mgr.StopMITM() }
-func (w *mitmWrapper) MITMActive() bool { return w.mgr.MITMActive() }
+func (w *mitmWrapper) StopMITM()                              { w.mgr.StopMITM() }
+func (w *mitmWrapper) MITMActive() bool                       { return w.mgr.MITMActive() }
+func (w *mitmWrapper) BlockDevice(ip string, mac net.HardwareAddr) { w.mgr.BlockDevice(ip, mac) }
+func (w *mitmWrapper) UnblockDevice(ip string)                { w.mgr.UnblockDevice(ip) }
+func (w *mitmWrapper) IsBlocked(ip string) bool               { return w.mgr.IsBlocked(ip) }
+func (w *mitmWrapper) BlockedIPs() []string                   { return w.mgr.BlockedIPs() }
 
 func openChromium(url string) {
 	args := []string{

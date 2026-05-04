@@ -47,6 +47,10 @@ const domainCounts = new Map();  // domain → count
 let encCount      = 0;
 let plainCount    = 0;
 
+const blockedIPs      = new Set();   // IPs currently blocked via ARP isolation
+const externalTraffic = new Map();   // countryCode → event count
+let   worldMapVisible  = false;
+
 let replayEvents  = [];
 let replayTimer   = null;
 let replayIdx     = 0;
@@ -109,12 +113,352 @@ function showToast(level, message) {
   }, 4500);
 }
 
+// ─── Country centroids [lon, lat] (equirectangular projection) ────────────────
+const CENTROIDS = {
+  US:[-98,38], GB:[-3,54], DE:[10,51], FR:[2,46], JP:[138,36], CN:[105,35],
+  BR:[-51,-10], RU:[100,60], IN:[78,21], AU:[134,-25], CA:[-96,60], NL:[5,52],
+  SE:[18,62], NO:[15,65], DK:[10,56], FI:[26,64], CH:[8,47], AT:[15,47],
+  BE:[4,50], ES:[-4,40], IT:[12,42], PL:[20,52], CZ:[16,50], HU:[19,47],
+  RO:[25,46], UA:[32,49], TR:[35,39], IL:[35,31], SA:[45,24], AE:[54,24],
+  SG:[104,1], KR:[128,37], HK:[114,22], TW:[121,24], TH:[101,15], MY:[108,2],
+  ID:[118,-5], PH:[122,13], VN:[108,16], MX:[-102,24], AR:[-64,-34],
+  CL:[-71,-30], CO:[-74,4], ZA:[25,-29], EG:[30,27], NG:[8,10], KE:[38,1],
+  MA:[-7,32], PT:[-8,39], GR:[22,39], IE:[-8,53], IS:[-18,65], NZ:[174,-41],
+  LU:[6,50], CY:[33,35], SK:[19,49], SI:[15,46], HR:[16,45], RS:[21,44],
+  BG:[25,43], LT:[24,56], LV:[25,57], EE:[25,59], BY:[28,53], MD:[29,47],
+  AM:[45,40], GE:[43,42], AZ:[47,40], KZ:[68,48], UZ:[63,41], PK:[70,31],
+  BD:[90,24], LK:[81,8], NP:[84,28], MM:[96,19], KH:[105,12], LA:[103,18],
+  IQ:[44,33], IR:[53,32], SY:[38,35], JO:[36,31], LB:[36,34], KW:[48,29],
+  QA:[51,25], BH:[51,26], OM:[57,23], YE:[48,16], ET:[40,9], TZ:[35,-6],
+  MZ:[35,-18], ZW:[30,-20], ZM:[28,-15], UG:[32,1], GH:[2,8], CI:[-6,6],
+  SN:[-14,14], CM:[12,6], AO:[18,-12], DZ:[2,28], LY:[17,26], TN:[9,34],
+};
+
+// ─── 3D Globe ────────────────────────────────────────────────────────────────
+let globeRotY  = 0.4, globeRotX = -0.28, globeVelY = 0.004;
+let globeAnimId = null, globeDragging = false, globeDragLast = {x:0, y:0};
+
+// Home position for arc origins [lat, lon] — change in browser console
+let GLOBE_HOME = [-14, -51];
+
+// Simplified continent coastlines: each polygon is [[lon,lat], ...]
+const LAND = [
+  // North America
+  [[-167,72],[-140,60],[-133,55],[-125,49],[-117,32],[-109,23],[-83,10],
+   [-78,8],[-76,20],[-65,18],[-60,14],[-52,4],[-54,10],[-60,13],[-65,18],
+   [-75,20],[-80,25],[-80,31],[-75,35],[-70,42],[-64,44],[-52,47],[-56,52],
+   [-65,46],[-73,44],[-80,43],[-82,42],[-87,46],[-95,49],[-110,49],
+   [-123,49],[-128,52],[-135,58],[-148,60],[-165,64],[-167,72]],
+  // South America
+  [[-79,11],[-68,12],[-60,8],[-52,4],[-35,-6],[-38,-14],[-40,-20],[-43,-23],
+   [-48,-28],[-53,-34],[-58,-38],[-65,-42],[-68,-56],[-70,-44],[-72,-36],
+   [-70,-26],[-70,-20],[-76,-10],[-78,-2],[-80,8],[-79,11]],
+  // Greenland
+  [[-54,62],[-44,64],[-26,68],[-20,72],[-18,76],[-22,82],[-36,84],
+   [-52,82],[-60,78],[-62,74],[-62,68],[-58,64],[-54,62]],
+  // Europe (mainland + Scandinavia)
+  [[-10,36],[-5,36],[0,36],[3,42],[5,44],[10,44],[14,40],[18,40],[22,38],
+   [28,42],[30,47],[32,42],[36,36],[29,38],[23,42],[18,48],[14,56],[16,56],
+   [18,60],[22,64],[26,70],[20,64],[14,58],[10,55],[8,54],[5,48],[2,51],
+   [0,50],[-2,52],[-5,54],[-8,52],[-10,48],[-10,36]],
+  // UK (Great Britain)
+  [[-6,50],[-2,50],[0,52],[2,52],[0,54],[-2,56],[-4,58],[-6,56],
+   [-4,54],[-2,52],[-4,50],[-6,50]],
+  // Iceland
+  [[-24,64],[-18,64],[-14,64],[-10,66],[-14,66],[-20,66],[-24,64]],
+  // Africa
+  [[-16,16],[-14,10],[-10,6],[-5,5],[0,5],[5,4],[10,2],[15,0],[20,-4],
+   [25,-10],[30,-14],[34,-20],[30,-28],[26,-34],[20,-36],[16,-30],[14,-22],
+   [12,-16],[10,-6],[5,4],[0,5],[-5,5],[-8,4],[-12,8],[-16,12],[-16,16]],
+  // Madagascar
+  [[44,-12],[50,-16],[50,-24],[46,-26],[44,-22],[44,-14],[44,-12]],
+  // Asia (main body)
+  [[26,38],[30,46],[36,46],[40,42],[46,38],[52,44],[58,52],[64,58],[70,58],
+   [76,62],[82,68],[90,72],[100,72],[110,72],[120,70],[130,68],[132,52],
+   [134,46],[130,36],[128,34],[122,26],[116,20],[110,18],[104,12],[100,10],
+   [100,4],[104,2],[106,-4],[110,-8],[116,-2],[122,10],[128,26],[126,28],
+   [120,22],[112,22],[104,14],[96,20],[88,24],[80,26],[76,22],[72,12],
+   [66,22],[60,22],[54,22],[50,28],[46,32],[42,42],[36,46],[26,38]],
+  // Indian peninsula
+  [[68,22],[68,12],[72,8],[76,8],[80,10],[82,14],[80,20],[76,22],[68,22]],
+  // Arabian peninsula
+  [[36,30],[38,36],[44,36],[48,30],[56,22],[58,20],[56,14],[50,12],
+   [44,12],[40,12],[36,18],[36,22],[36,30]],
+  // SE Asia (mainland)
+  [[100,24],[100,14],[104,10],[100,4],[102,2],[104,4],[106,14],[100,20],[100,24]],
+  // Japan (Honshu)
+  [[130,32],[132,34],[134,36],[136,36],[138,38],[140,40],[140,44],
+   [144,44],[142,40],[140,38],[136,34],[132,32],[130,32]],
+  // Borneo
+  [[108,2],[110,4],[116,6],[118,6],[116,4],[114,2],[110,0],[108,2]],
+  // Sumatra
+  [[96,6],[100,4],[104,0],[106,-4],[104,-4],[100,-2],[96,4],[96,6]],
+  // Australia
+  [[114,-22],[120,-18],[126,-14],[130,-12],[136,-12],[140,-14],[144,-20],
+   [148,-22],[152,-26],[152,-30],[150,-36],[146,-38],[142,-38],[138,-36],
+   [132,-34],[126,-32],[122,-26],[118,-24],[114,-22]],
+  // New Zealand (N. Island)
+  [[174,-38],[176,-36],[178,-38],[176,-40],[174,-38]],
+];
+
+// Great-circle helpers
+function ll2xyz(latDeg, lonDeg) {
+  const a = latDeg * Math.PI / 180, b = lonDeg * Math.PI / 180;
+  return [Math.cos(a)*Math.cos(b), Math.sin(a), Math.cos(a)*Math.sin(b)];
+}
+function slerp3(v1, v2, t) {
+  const d  = Math.max(-1, Math.min(1, v1[0]*v2[0]+v1[1]*v2[1]+v1[2]*v2[2]));
+  const om = Math.acos(d);
+  if (om < 1e-6) return [v1[0], v1[1], v1[2]];
+  const s = Math.sin(om);
+  return [
+    (Math.sin((1-t)*om)*v1[0]+Math.sin(t*om)*v2[0])/s,
+    (Math.sin((1-t)*om)*v1[1]+Math.sin(t*om)*v2[1])/s,
+    (Math.sin((1-t)*om)*v1[2]+Math.sin(t*om)*v2[2])/s,
+  ];
+}
+
+function toggleWorldMap() {
+  worldMapVisible = !worldMapVisible;
+  document.getElementById('worldmap-panel').classList.toggle('hidden', !worldMapVisible);
+  document.getElementById('map-btn').classList.toggle('mode-active', worldMapVisible);
+  if (worldMapVisible) startGlobe();
+  else stopGlobe();
+}
+
+function startGlobe() {
+  if (globeAnimId) return;
+  const cv = document.getElementById('world-map-canvas');
+  if (!cv) return;
+  cv.addEventListener('mousedown',  _globeDown);
+  cv.addEventListener('mousemove',  _globeMove);
+  cv.addEventListener('mouseup',    _globeUp);
+  cv.addEventListener('mouseleave', _globeUp);
+  function loop() { drawGlobe(); globeAnimId = requestAnimationFrame(loop); }
+  globeAnimId = requestAnimationFrame(loop);
+}
+
+function stopGlobe() {
+  if (globeAnimId) { cancelAnimationFrame(globeAnimId); globeAnimId = null; }
+  const cv = document.getElementById('world-map-canvas');
+  if (!cv) return;
+  cv.removeEventListener('mousedown',  _globeDown);
+  cv.removeEventListener('mousemove',  _globeMove);
+  cv.removeEventListener('mouseup',    _globeUp);
+  cv.removeEventListener('mouseleave', _globeUp);
+}
+
+function _globeDown(e) {
+  globeDragging = true;
+  globeDragLast = { x: e.clientX, y: e.clientY };
+  globeVelY = 0;
+  e.preventDefault();
+}
+function _globeMove(e) {
+  if (!globeDragging) return;
+  const dx = e.clientX - globeDragLast.x;
+  const dy = e.clientY - globeDragLast.y;
+  globeRotY += dx * 0.006;
+  globeRotX  = Math.max(-1.35, Math.min(1.35, globeRotX + dy * 0.006));
+  globeVelY  = dx * 0.002;
+  globeDragLast = { x: e.clientX, y: e.clientY };
+}
+function _globeUp() {
+  globeDragging = false;
+  if (Math.abs(globeVelY) < 0.001) globeVelY = 0.004;
+}
+
+function drawGlobe() {
+  const wCanvas = document.getElementById('world-map-canvas');
+  if (!wCanvas) return;
+  const wc = wCanvas.getContext('2d');
+  const W  = wCanvas.width;
+  const H  = wCanvas.height;
+  const cx = W / 2, cy = H / 2;
+  const R  = Math.min(W, H) / 2 - 14;
+
+  if (!globeDragging) {
+    globeVelY = globeVelY * 0.97 + (globeVelY > 0 ? 0.00008 : -0.00008);
+    if (Math.abs(globeVelY) < 0.001) globeVelY = 0.004;
+    globeRotY += globeVelY;
+  }
+
+  wc.clearRect(0, 0, W, H);
+
+  // Atmosphere halo
+  const atm = wc.createRadialGradient(cx, cy, R * 0.88, cx, cy, R * 1.18);
+  atm.addColorStop(0, 'rgba(0,255,65,0.10)');
+  atm.addColorStop(0.5, 'rgba(0,212,255,0.04)');
+  atm.addColorStop(1, 'rgba(0,0,0,0)');
+  wc.beginPath(); wc.arc(cx, cy, R * 1.18, 0, Math.PI * 2);
+  wc.fillStyle = atm; wc.fill();
+
+  // Globe body (deep ocean)
+  const bg = wc.createRadialGradient(cx - R*0.22, cy - R*0.22, R*0.04, cx, cy, R);
+  bg.addColorStop(0, '#0f2010'); bg.addColorStop(0.5, '#071408'); bg.addColorStop(1, '#020604');
+  wc.beginPath(); wc.arc(cx, cy, R, 0, Math.PI * 2);
+  wc.fillStyle = bg; wc.fill();
+
+  // ── Projection: lat/lon → screen coords + depth ────────────────────────────
+  function proj(latDeg, lonDeg) {
+    const lat = latDeg * Math.PI / 180, lon = lonDeg * Math.PI / 180;
+    let x = Math.cos(lat)*Math.cos(lon), y = Math.sin(lat), z = Math.cos(lat)*Math.sin(lon);
+    const cY = Math.cos(globeRotY), sY = Math.sin(globeRotY);
+    const x1 = x*cY - z*sY, z1 = x*sY + z*cY;
+    const cX = Math.cos(globeRotX), sX = Math.sin(globeRotX);
+    const y2 = y*cX - z1*sX, z2 = y*sX + z1*cX;
+    return { sx: cx + R*x1, sy: cy - R*y2, d: z2 };
+  }
+
+  // Clip all interior drawing to the globe disc
+  wc.save();
+  wc.beginPath(); wc.arc(cx, cy, R, 0, Math.PI * 2); wc.clip();
+
+  // ── Graticule ────────────────────────────────────────────────────────────────
+  function grat(pts, alpha, lw) {
+    wc.strokeStyle = `rgba(0,255,65,${alpha})`; wc.lineWidth = lw || 0.5;
+    wc.beginPath(); let on = false;
+    for (const [la, lo] of pts) {
+      const p = proj(la, lo);
+      if (p.d > -0.06) { if (!on) { wc.moveTo(p.sx, p.sy); on = true; } else wc.lineTo(p.sx, p.sy); }
+      else on = false;
+    }
+    wc.stroke();
+  }
+  const latRow = (la) => Array.from({length:121}, (_,i) => [la, -180+i*3]);
+  const lonCol = (lo) => Array.from({length: 61}, (_,i) => [-90+i*3, lo]);
+  for (let la = -60; la <= 60; la += 30) grat(latRow(la), la === 0 ? 0.2 : 0.06, la === 0 ? 0.8 : 0.5);
+  for (let lo = -180; lo < 180; lo += 30) grat(lonCol(lo), 0.06);
+
+  // ── Continent outlines ────────────────────────────────────────────────────────
+  for (const poly of LAND) {
+    wc.beginPath(); let on = false;
+    for (const v of poly) {                     // v = [lon, lat]
+      const p = proj(v[1], v[0]);
+      if (p.d > -0.02) {
+        if (!on) { wc.moveTo(p.sx, p.sy); on = true; }
+        else      wc.lineTo(p.sx, p.sy);
+      } else { on = false; }
+    }
+    wc.strokeStyle = 'rgba(0,255,65,0.45)';
+    wc.lineWidth = 1.1;
+    wc.stroke();
+  }
+
+  // ── Connection arcs from active countries → home ──────────────────────────
+  const now       = Date.now();
+  const arcPhase  = (now * 0.00038) % 1;
+  const vh        = ll2xyz(GLOBE_HOME[0], GLOBE_HOME[1]);
+  const ARC_STEPS = 60;
+
+  for (const [cc, count] of externalTraffic) {
+    const pos = CENTROIDS[cc];
+    if (!pos) continue;
+    const vd = ll2xyz(pos[1], pos[0]);          // [lon,lat] → xyz
+
+    // Sample great-circle arc (destination → home)
+    const pts = [];
+    for (let i = 0; i <= ARC_STEPS; i++) {
+      const v = slerp3(vd, vh, i / ARC_STEPS);
+      const la = Math.asin(Math.max(-1, Math.min(1, v[1]))) * 180 / Math.PI;
+      const lo = Math.atan2(v[2], v[0]) * 180 / Math.PI;
+      pts.push(proj(la, lo));
+    }
+
+    // Dim base arc
+    wc.beginPath(); let on = false;
+    for (const p of pts) {
+      if (p.d > 0) { if (!on) { wc.moveTo(p.sx, p.sy); on = true; } else wc.lineTo(p.sx, p.sy); }
+      else on = false;
+    }
+    wc.strokeStyle = 'rgba(0,212,255,0.2)'; wc.lineWidth = 0.7; wc.stroke();
+
+    // Animated packets (cyan dots flowing dest→home)
+    const nPkts = Math.min(3, 1 + Math.floor(Math.log1p(count)));
+    const ph    = ((cc.charCodeAt(0) * 137 + (cc.charCodeAt(1) || 0) * 31) % 1000) / 1000;
+    for (let i = 0; i < nPkts; i++) {
+      const t   = (arcPhase + ph + i / nPkts) % 1;
+      const idx = Math.floor(t * ARC_STEPS);
+      const fr  = t * ARC_STEPS - idx;
+      if (idx >= pts.length - 1) continue;
+      const pa = pts[idx], pb = pts[idx + 1];
+      const depth = pa.d + fr * (pb.d - pa.d);
+      if (depth <= 0) continue;
+      const fade = Math.sin(t * Math.PI) * Math.min(1, depth * 2.5);
+      if (fade < 0.06) continue;
+      const px = pa.sx + fr * (pb.sx - pa.sx);
+      const py = pa.sy + fr * (pb.sy - pa.sy);
+      wc.beginPath();
+      wc.arc(px, py, 2.4 * fade, 0, Math.PI * 2);
+      wc.fillStyle    = `rgba(0,212,255,${0.95 * fade})`;
+      wc.shadowBlur   = 10; wc.shadowColor = '#00d4ff';
+      wc.fill(); wc.shadowBlur = 0;
+    }
+  }
+
+  // ── Country traffic dots (green glow) ────────────────────────────────────────
+  for (const [cc, count] of externalTraffic) {
+    const pos = CENTROIDS[cc];
+    if (!pos) continue;
+    const p = proj(pos[1], pos[0]);
+    if (p.d <= 0) continue;
+    const fade  = Math.min(1, p.d * 1.4);
+    const rBase = 3 + Math.min(Math.log1p(count) * 2.5, 11);
+    const pulse = 1 + 0.28 * Math.sin(now * 0.0025 + cc.charCodeAt(0) * 1.9);
+    const r     = rBase * pulse * fade;
+    const g = wc.createRadialGradient(p.sx, p.sy, 0, p.sx, p.sy, r * 3);
+    g.addColorStop(0, `rgba(0,255,65,${0.8*fade})`);
+    g.addColorStop(0.4, `rgba(0,255,65,${0.25*fade})`);
+    g.addColorStop(1, 'rgba(0,255,65,0)');
+    wc.beginPath(); wc.arc(p.sx, p.sy, r*3, 0, Math.PI*2); wc.fillStyle = g; wc.fill();
+    wc.beginPath(); wc.arc(p.sx, p.sy, Math.max(1.5, r*0.38), 0, Math.PI*2);
+    wc.fillStyle = `rgba(0,255,65,${fade})`; wc.shadowBlur = 8; wc.shadowColor = '#00ff41';
+    wc.fill(); wc.shadowBlur = 0;
+    if (p.d > 0.26) {
+      wc.fillStyle = `rgba(0,255,65,${Math.min(1, fade*1.2)})`;
+      wc.font = `bold ${Math.max(7, Math.floor(10*fade))}px "Courier New"`;
+      wc.textAlign = 'center'; wc.textBaseline = 'bottom';
+      wc.fillText(cc, p.sx, p.sy - r - 2);
+    }
+  }
+
+  // ── Home marker (yellow dot at GLOBE_HOME) ────────────────────────────────
+  const ph = proj(GLOBE_HOME[0], GLOBE_HOME[1]);
+  if (ph.d > 0) {
+    const hFade = Math.min(1, ph.d * 1.5);
+    const hPulse = 1 + 0.3 * Math.sin(now * 0.003);
+    wc.beginPath(); wc.arc(ph.sx, ph.sy, 4.5 * hPulse * hFade, 0, Math.PI * 2);
+    wc.fillStyle = `rgba(255,215,0,${hFade})`;
+    wc.shadowBlur = 16; wc.shadowColor = '#ffd700';
+    wc.fill(); wc.shadowBlur = 0;
+  }
+
+  wc.restore();
+
+  // ── Globe rim + specular ──────────────────────────────────────────────────
+  wc.beginPath(); wc.arc(cx, cy, R, 0, Math.PI*2);
+  wc.strokeStyle = 'rgba(0,255,65,0.4)'; wc.lineWidth = 1.5; wc.stroke();
+  const shine = wc.createRadialGradient(cx-R*0.36, cy-R*0.36, 0, cx-R*0.36, cy-R*0.36, R*0.52);
+  shine.addColorStop(0, 'rgba(255,255,255,0.07)'); shine.addColorStop(1, 'rgba(255,255,255,0)');
+  wc.beginPath(); wc.arc(cx, cy, R, 0, Math.PI*2); wc.fillStyle = shine; wc.fill();
+
+  // ── Legend ────────────────────────────────────────────────────────────────
+  const legEl = document.getElementById('worldmap-legend');
+  if (legEl) {
+    const top = [...externalTraffic.entries()].sort((a,b) => b[1]-a[1]).slice(0, 8);
+    legEl.innerHTML = top.length
+      ? top.map(([cc, n]) => `<span class="map-legend-item">${emojiFlag(cc)} ${cc} <b>${n}</b></span>`).join('')
+      : '<span style="color:#003d15;font-size:10px">no external traffic yet</span>';
+  }
+}
+
 // ─── WebSocket ────────────────────────────────────────────────────────────────
 function connect() {
   const ws = new WebSocket('ws://' + location.host + '/ws');
 
   ws.onopen = () => {
     document.getElementById('scan-status').textContent = 'CONNECTED';
+    loadBlockedIPs();
   };
 
   ws.onclose = () => {
@@ -133,6 +477,7 @@ function handleEvent(ev) {
       (ev.devices || []).forEach(addOrUpdate);
       loadTrafficHistory(ev.traffics);
       if (ev.mitm_on != null) updateMITMState(ev.mitm_on);
+      updateHealthScore();
       break;
 
     case 'device_found':
@@ -253,6 +598,87 @@ function toggleMITM() {
   fetch(endpoint, { method: 'POST' })
     .catch((e) => showToast('danger', 'MITM error: ' + e.message));
 }
+
+// ─── Block / Isolate ──────────────────────────────────────────────────────────
+function loadBlockedIPs() {
+  fetch('/api/block')
+    .then((r) => r.ok ? r.json() : [])
+    .then((ips) => { blockedIPs.clear(); (ips || []).forEach((ip) => blockedIPs.add(ip)); })
+    .catch(() => {});
+}
+
+function toggleBlock() {
+  const dev = devices.get(selectedIP);
+  if (!dev || dev.is_gateway) return;
+  if (blockedIPs.has(selectedIP)) {
+    fetch('/api/unblock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip: selectedIP })
+    }).then(() => {
+      blockedIPs.delete(selectedIP);
+      renderDossier(dev);
+    }).catch((e) => showToast('danger', 'Unblock failed: ' + e.message));
+  } else {
+    fetch('/api/block', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip: selectedIP, mac: dev.mac })
+    }).then(() => {
+      blockedIPs.add(selectedIP);
+      renderDossier(dev);
+    }).catch((e) => showToast('danger', 'Block failed: ' + e.message));
+  }
+}
+
+// ─── Health Score ─────────────────────────────────────────────────────────────
+function calcHealthScore() {
+  let score = 100;
+  let critCVE = 0, highCVE = 0, threats = 0, unknown = 0;
+
+  for (const [, dev] of devices) {
+    if (!dev.active) continue;
+    if (dev.cves && dev.cves.length > 0) {
+      if (dev.cves.some((c) => c.severity === 'CRITICAL')) critCVE++;
+      else if (dev.cves.some((c) => c.severity === 'HIGH'))  highCVE++;
+    }
+    if (dev.threat) threats++;
+    if (!dev.is_gateway && !dev.hostname && !dev.device_type && !dev.label) unknown++;
+  }
+
+  score -= Math.min(critCVE * 15, 30);
+  score -= Math.min(highCVE  * 8,  16);
+  score -= Math.min(threats  * 10, 20);
+  score -= Math.min(unknown  * 4,  12);
+
+  const total = encCount + plainCount;
+  if (total > 10) {
+    const ratio = plainCount / total;
+    if      (ratio > 0.5) score -= 20;
+    else if (ratio > 0.2) score -= 10;
+  }
+
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function updateHealthScore() {
+  const el = document.getElementById('health-score');
+  if (!el) return;
+  const s = calcHealthScore();
+  el.textContent = s;
+  if (s >= 70) {
+    el.style.color      = 'var(--green)';
+    el.style.textShadow = '0 0 8px var(--green)';
+  } else if (s >= 40) {
+    el.style.color      = 'var(--yellow)';
+    el.style.textShadow = '0 0 8px var(--yellow)';
+  } else {
+    el.style.color      = 'var(--red)';
+    el.style.textShadow = '0 0 8px var(--red)';
+  }
+}
+
+setInterval(updateHealthScore, 5000);
 
 // ─── Export ───────────────────────────────────────────────────────────────────
 function exportData() {
@@ -912,36 +1338,55 @@ function drawEdges() {
     const dev = devices.get(ip);
     if (!dev || !dev.active || dev.is_gateway) continue;
 
-    // Traffic heatmap: scale lineWidth and opacity by rate
+    const blocked  = blockedIPs.has(ip);
     const rate     = (dev.rate_in || 0) + (dev.rate_out || 0);
-    const MAX_RATE = 2 * 1024 * 1024; // 2 MB/s
+    const MAX_RATE = 2 * 1024 * 1024;
     const rateT    = Math.min(rate / MAX_RATE, 1);
     const lw       = 1 + 4 * rateT;
-    const alpha    = 0.12 + 0.5 * rateT;
+    const alpha    = blocked ? 0.35 : (0.12 + 0.5 * rateT);
+    const lineColor = blocked ? 'rgba(255,32,32,' + alpha + ')' : 'rgba(0,212,255,' + alpha + ')';
 
+    // Edge line
     ctx.save();
     ctx.beginPath();
     ctx.moveTo(gwNode.x, gwNode.y);
     ctx.lineTo(n.x, n.y);
-    ctx.strokeStyle = 'rgba(0,212,255,' + alpha + ')';
-    ctx.lineWidth   = lw;
-    if (rateT > 0.1) {
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth   = blocked ? 1.5 : lw;
+    if (blocked) {
+      ctx.setLineDash([5, 5]);
+    } else if (rateT > 0.1) {
       ctx.shadowBlur  = 6 * rateT;
       ctx.shadowColor = CYAN;
     }
     ctx.stroke();
-
-    // Animated packet dot
-    const pT = ((t * 0.4 + hashIP(ip) * 0.7) % 1);
-    const px  = gwNode.x + (n.x - gwNode.x) * pT;
-    const py  = gwNode.y + (n.y - gwNode.y) * pT;
-    ctx.beginPath();
-    ctx.arc(px, py, 2.5, 0, Math.PI * 2);
-    ctx.fillStyle   = CYAN;
-    ctx.shadowBlur  = 8;
-    ctx.shadowColor = CYAN;
-    ctx.fill();
+    ctx.setLineDash([]);
     ctx.restore();
+
+    if (blocked) continue;
+
+    // Traffic particles: count and speed scale with bandwidth
+    const numP  = 1 + Math.floor(rateT * 3);
+    const speed = 0.15 + 0.35 * rateT;
+    const hash  = hashIP(ip);
+
+    for (let i = 0; i < numP; i++) {
+      const phase = ((t * speed + hash * 0.7 + i / numP) % 1);
+      const fade  = Math.sin(phase * Math.PI);
+      if (fade < 0.05) continue;
+      const px = gwNode.x + (n.x - gwNode.x) * phase;
+      const py = gwNode.y + (n.y - gwNode.y) * phase;
+      const pr = 1 + fade * 2;
+      ctx.save();
+      ctx.globalAlpha  = fade * (0.4 + 0.6 * Math.max(rateT, 0.2));
+      ctx.beginPath();
+      ctx.arc(px, py, pr, 0, Math.PI * 2);
+      ctx.fillStyle   = CYAN;
+      ctx.shadowBlur  = 10;
+      ctx.shadowColor = CYAN;
+      ctx.fill();
+      ctx.restore();
+    }
   }
 }
 
@@ -952,6 +1397,49 @@ function hashIP(ip) {
 }
 
 // ─── Nodes ────────────────────────────────────────────────────────────────────
+function deviceIcon(dev) {
+  if (dev.is_gateway) return '🌐';
+  const t = (dev.device_type || '').toLowerCase();
+  const v = (dev.vendor || '').toLowerCase();
+  const o = (dev.os || '').toLowerCase();
+
+  if (t.includes('apple tv') || t.includes('airplay')) return '📺';
+  if (t.includes('chromecast') || t.includes('google tv')) return '📺';
+  if (t.includes('iphone') || t.includes('ipad')) return '📱';
+  if (t.includes('printer')) return '🖨';
+  if (t.includes('camera')) return '📷';
+  if (t.includes('speaker') || t.includes('sonos') || t.includes('audio')) return '🔊';
+  if (t.includes('xbox') || t.includes('shield')) return '🎮';
+  if (t.includes('homekit') || t.includes('hue') || t.includes('iot')) return '💡';
+  if (t.includes('spotify') || t.includes('itunes') || t.includes('daap')) return '🎵';
+  if (t.includes('windows pc')) return '🖥';
+  if (t.includes('windows') || t.includes('nas')) return '💻';
+  if (t.includes('linux') || t.includes('server')) return '🐧';
+  if (t.includes('gateway') || t.includes('router') || t.includes('network device') || t.includes('web server')) return '🌐';
+  if (t.includes('apple')) return '🍎';
+  if (t.includes('samsung')) return '📱';
+  if (t.includes('google')) return '🤖';
+  if (t.includes('amazon')) return '📦';
+  if (t.includes('workstation')) return '🖥';
+  if (t.includes('sony')) return '🎮';
+  if (t.includes('lg')) return '📺';
+
+  if (v.includes('apple')) return '🍎';
+  if (v.includes('samsung')) return '📱';
+  if (v.includes('cisco') || v.includes('juniper') || v.includes('mikrotik') || v.includes('ubiquiti')) return '🌐';
+  if (v.includes('raspberry')) return '🐧';
+  if (v.includes('sony')) return '🎮';
+  if (v.includes('google')) return '🤖';
+  if (v.includes('amazon')) return '📦';
+
+  if (o.includes('windows')) return '🖥';
+  if (o.includes('linux') || o.includes('unix')) return '🐧';
+  if (o.includes('ios') || o.includes('mac')) return '🍎';
+  if (o.includes('android')) return '🤖';
+
+  return '❓';
+}
+
 function nodeColor(dev) {
   if (!dev.active)                              return '#333';
   if (dev.is_gateway)                           return YELLOW;
@@ -1025,13 +1513,36 @@ function drawNodes() {
     if (n.dragging) { ctx.shadowBlur = 35; ctx.shadowColor = color; }
     ctx.stroke();
 
-    // Center dot
-    ctx.beginPath();
-    ctx.arc(n.x, n.y, 3, 0, Math.PI * 2);
-    ctx.fillStyle = color;
-    ctx.fill();
-
     ctx.restore();
+
+    // Device icon inside node
+    ctx.save();
+    ctx.font         = '11px sans-serif';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowBlur   = 0;
+    ctx.globalAlpha  = dev.active ? 1 : 0.35;
+    ctx.fillText(deviceIcon(dev), n.x, n.y);
+    ctx.restore();
+
+    // Blocked indicator: pulsing red ring + badge
+    if (blockedIPs.has(ip)) {
+      ctx.save();
+      const bPulse = radius + 5 + 3 * Math.sin(now * 0.006);
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, bPulse, 0, Math.PI * 2);
+      ctx.strokeStyle = RED;
+      ctx.lineWidth   = 2;
+      ctx.shadowBlur  = 16;
+      ctx.shadowColor = RED;
+      ctx.stroke();
+      ctx.font         = '9px sans-serif';
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.shadowBlur   = 0;
+      ctx.fillText('🚫', n.x + radius - 1, n.y - radius + 1);
+      ctx.restore();
+    }
 
     // Labels
     ctx.save();
@@ -1273,10 +1784,41 @@ canvas.addEventListener('contextmenu', (e) => {
   }
 });
 
+// ─── Double-click: rename node ────────────────────────────────────────────────
+canvas.addEventListener('dblclick', (e) => {
+  const { mx, my } = canvasMouse(e);
+  const hit = hitTest(mx, my);
+  if (!hit) return;
+  const dev = devices.get(hit);
+  if (!dev) return;
+  const current = dev.label || dev.hostname || '';
+  const newLabel = prompt('Nome do dispositivo (' + hit + '):', current);
+  if (newLabel === null) return;
+  dev.label = newLabel.trim();
+  fetch('/api/label', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ip: hit, label: newLabel.trim() })
+  });
+  showToast('info', hit + ' → ' + (newLabel.trim() || 'label removido'));
+  if (selectedIP === hit) renderDossier(dev);
+});
+
 // ─── Dossier ──────────────────────────────────────────────────────────────────
 function renderDossier(dev) {
   if (!dev) return;
   document.getElementById('dossier').classList.remove('hidden');
+
+  // Block button
+  const blockBtn = document.getElementById('block-btn');
+  if (dev.is_gateway) {
+    blockBtn.style.display = 'none';
+  } else {
+    blockBtn.style.display = '';
+    const isBlocked = blockedIPs.has(dev.ip);
+    blockBtn.textContent = isBlocked ? '✓ UNBLOCK' : '🚫 BLOCK';
+    blockBtn.className   = 'tbtn ' + (isBlocked ? 'btn-unblock' : 'btn-block');
+  }
 
   set('d-ip',       dev.ip       || '—');
   set('d-mac',      dev.mac      || '—');
@@ -1325,6 +1867,32 @@ function renderDossier(dev) {
   } else {
     cveSection.style.display = 'none';
     cvesEl.innerHTML = '';
+  }
+
+  // SSL certs
+  const sslSection = document.getElementById('ssl-section');
+  const sslEl      = document.getElementById('d-ssl');
+  if (dev.ssl_certs && dev.ssl_certs.length > 0) {
+    sslSection.style.display = '';
+    sslEl.innerHTML = dev.ssl_certs.map((cert) => {
+      const ok       = cert.valid && !cert.self_signed;
+      const icon     = ok ? '✓' : (cert.valid ? '⚠' : '✗');
+      const icolor   = ok ? 'var(--green)' : (cert.valid ? 'var(--yellow)' : 'var(--red)');
+      const days     = cert.days_left;
+      const dcolor   = days < 0 ? 'var(--red)' : days < 30 ? 'var(--yellow)' : 'var(--green)';
+      const selfTag  = cert.self_signed ? '<span class="ssl-self">SELF</span>' : '';
+      return `<div class="ssl-entry">
+        <span style="color:${icolor};font-size:11px">${icon}</span>
+        <span class="ssl-port">:${cert.port}</span>
+        <span class="ssl-cn" title="${escHtml(cert.cn)}">${escHtml(cert.cn || '—')}</span>
+        <span class="ssl-issuer" title="${escHtml(cert.issuer)}">${escHtml((cert.issuer || '—').substring(0, 18))}</span>
+        <span style="color:${dcolor}">${days}d</span>
+        ${selfTag}
+      </div>`;
+    }).join('');
+  } else {
+    sslSection.style.display = 'none';
+    sslEl.innerHTML = '';
   }
 
   // Device type
@@ -1450,6 +2018,12 @@ function addTrafficEvent(ev) {
     encCount++;
   } else if (ev.proto === 'HTTP') {
     plainCount++;
+  }
+
+  // Track external country traffic for globe
+  const cc = ev.country_code;
+  if (cc && cc.length === 2) {
+    externalTraffic.set(cc, (externalTraffic.get(cc) || 0) + 1);
   }
 
   if (feedFilter === 'ALL' || ev.proto === feedFilter) {

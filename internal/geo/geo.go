@@ -27,6 +27,20 @@ type cacheEntry struct {
 
 var c = &cache{entries: make(map[string]cacheEntry)}
 
+// LookupCached returns geo info only if already in cache (no network call).
+func LookupCached(ip string) Info {
+	if isPrivate(net.ParseIP(ip)) {
+		return Info{}
+	}
+	c.mu.RLock()
+	entry, ok := c.entries[ip]
+	c.mu.RUnlock()
+	if ok && time.Now().Before(entry.expires) {
+		return entry.info
+	}
+	return Info{}
+}
+
 // Lookup returns geo info for an IP. Private IPs return an empty Info.
 // Uses ip-api.com (free, 45 req/min, no key needed).
 func Lookup(ip string) Info {

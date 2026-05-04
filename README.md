@@ -29,32 +29,38 @@
 - **Threat detection** — ~40 known-bad domains/IPs flagged in real time (botnets, miners, RATs)
 
 ### Security / Offensive
-- **ARP MITM** — Poison entire LAN via ARP spoofing + IP forwarding; graceful ARP restore on stop
+- **ARP MITM** — Poison entire LAN via ARP spoofing + IP forwarding; promiscuous mode enabled for full traffic visibility; graceful ARP restore on stop
+- **Device isolation / block** — Isolate any device from the LAN by poisoning its ARP with a dead MAC (`02:00:00:00:00:01`); one-click from the dossier panel or UI
 - **DNS spoofing** — Intercept and redirect DNS queries from any LAN device (via iptables redirect + custom resolver)
 - **SSL stripping detection** — Alerts when a device accesses a domain via HTTP that it previously used HTTPS for
+- **SSL certificate inspection** — Connects to ports 443/8443/4443 and displays CN, issuer, expiry, days left, and self-signed flag per device
 - **ARP spoof detection** — Alerts when any IP changes its MAC address
 - **Port scan detection** — Alerts when >10 unique ports are probed from the same source within 5s
 - **Rogue DHCP detection** — Alerts on unauthorized DHCP servers on the LAN
 - **WiFi probe monitor** — Captures 802.11 probe requests from nearby devices
 
 ### Visualization
-- **Animated radar** — Force-directed graph with sonar sweep, neon glow, animated packet dots
+- **Animated radar** — Force-directed graph with sonar sweep, neon glow, animated packet dots on edges (count/speed ∝ bandwidth)
 - **Topology mode** — Switch to concentric-ring layout: gateway → network devices → end devices
 - **Heatmap overlay** — Additive glow per node based on real-time traffic volume
 - **Vendor clustering** — Nodes from the same manufacturer drift together automatically
 - **Bandwidth chart** — 60-second history bar chart (canvas, bottom-right)
 - **Latency sparklines** — Ping RTT history per device in the dossier panel
 - **Peer link edges** — Dashed lines between devices communicating directly
+- **World connections map** — Equirectangular world map showing countries where external traffic was detected; dot size scales with event count
 
 ### Data & History
 - **Statistics dashboard** — Total devices, top domains, busiest hosts, encryption ratio, total bytes
 - **Session replay** — Load any past session from JSONL log and replay it as an animation
 - **Persistent session log** — JSONL daily log in `data/sessions/` for post-analysis
 - **Device timeline** — Online/offline history per device across sessions
-- **Geo / flags** — Country + emoji flag for external IPs
+- **Geo / flags** — Country + emoji flag for external IPs via ip-api.com (24h cache, no key required)
+- **Health score** — Network security score 0–100 based on CVEs, threats, and unencrypted traffic; shown in header
 - **Export** — Download all device data as JSON
 
 ### UI
+- **Device icons** — Emoji icons per device type (📱 phone, 🐧 Linux, 🖥 Windows, 📷 camera, 🌐 router, etc.)
+- **Device labels** — Double-click any node to assign a custom name
 - **Filter bar** — Filter nodes by status (ALL/ACTIVE/PORTS OPEN/THREAT) or vendor name
 - **Node pinning** — Right-click any node to lock its position
 - **Toast notifications** — Severity-colored alerts (info/warning/danger)
@@ -108,16 +114,16 @@ Probe   ──┘                                     │
 
 | Package | Description |
 |---|---|
-| `internal/scanner` | ARP scan, mDNS fingerprint, port scan, CVE matching, OS detection, ARP spoof detection, latency history |
-| `internal/sniffer` | Raw packet capture, DNS/TLS/HTTP parsing, bandwidth, passive OS, port scan detection, DHCP rogue, traffic correlation, SSL strip detection |
-| `internal/mitm` | ARP poisoning, IP forwarding, graceful restore |
+| `internal/scanner` | ARP scan, mDNS fingerprint, port scan, CVE matching, SSL cert inspection, OS detection, ARP spoof detection, latency history |
+| `internal/sniffer` | Raw packet capture (promiscuous mode), DNS/TLS/HTTP parsing, bandwidth, passive OS, port scan detection, DHCP rogue, traffic correlation, SSL strip detection, geo lookup |
+| `internal/mitm` | ARP poisoning, IP forwarding, graceful restore, device isolation (dead MAC) |
 | `internal/dnsspoof` | DNS interception via iptables + custom resolver with per-domain spoof rules |
 | `internal/cve` | Static CVE database, banner-based matching |
 | `internal/probe` | 802.11 monitor mode, probe request capture |
-| `internal/geo` | ip-api.com lookup, 24h cache, emoji flags |
+| `internal/geo` | ip-api.com lookup, 24h memory cache, emoji flags, `LookupCached()` for zero-latency path |
 | `internal/threat` | Static bad-domain/IP list |
 | `internal/oui` | MAC vendor database (~600 prefixes) |
-| `internal/store` | JSON persistence for device metadata |
+| `internal/store` | JSON persistence for device metadata (atomic writes via rename) |
 | `internal/logger` | JSONL daily session log |
 | `internal/api` | HTTP server, WebSocket hub, REST endpoints |
 | `frontend/` | Single-file Canvas app (no build step, no dependencies) |
@@ -129,6 +135,9 @@ Probe   ──┘                                     │
 | `GET` | `/api/devices` | All known devices |
 | `POST` | `/api/mitm/on` | Enable ARP MITM |
 | `POST` | `/api/mitm/off` | Disable MITM and restore ARP |
+| `GET/POST` | `/api/block` | List blocked IPs / block a device `{ip, mac}` |
+| `POST` | `/api/unblock` | Unblock a device `{ip}` |
+| `POST` | `/api/label` | Set custom label `{ip, label}` |
 | `GET` | `/api/export` | Download device list as JSON |
 | `GET` | `/api/sessions` | List available session dates |
 | `GET` | `/api/sessions/{date}` | Download JSONL session log |
@@ -162,12 +171,15 @@ Probe   ──┘                                     │
 | Click node | Open dossier panel |
 | Drag node | Move it around |
 | Right-click node | Pin / unpin position |
+| Double-click node | Set custom label |
 | Click empty space | Close dossier |
 | ⬡ TOPO button | Toggle topology layout mode |
 | ◉ HEAT button | Toggle heatmap overlay |
 | ≡ STATS button | Open statistics dashboard |
 | ⏪ REPLAY button | Open session replay panel |
 | ⚡ SPOOF button | Open DNS spoof rules panel |
+| 🌍 MAP button | Open world connections map |
+| 🚫 BLOCK (dossier) | Isolate device from LAN |
 
 ## Data persistence
 

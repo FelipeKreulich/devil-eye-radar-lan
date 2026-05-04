@@ -19,6 +19,7 @@
       <span>IFACE: <span id="iface">—</span></span>
       <span>NODES: <span id="count">0</span></span>
       <span id="scan-status" class="pulse-text">SCANNING...</span>
+      <span>SCORE: <span id="health-score">—</span>/100</span>
       <span id="clock"></span>
     </div>
     <div id="toolbar">
@@ -31,6 +32,7 @@
       <button class="tbtn" id="stats-btn" title="Statistics" onclick="toggleStats()">≡ STATS</button>
       <button class="tbtn" id="replay-btn" title="Session replay" onclick="toggleReplay()">⏪ REPLAY</button>
       <button class="tbtn" id="spoof-btn" title="DNS Spoof" onclick="toggleDNSSpoof()">⚡ SPOOF</button>
+      <button class="tbtn" id="map-btn" title="World connections map" onclick="toggleWorldMap()">🌍 MAP</button>
     </div>
   </header>
 
@@ -84,11 +86,21 @@
       </div>
     </div>
 
+    <!-- World Map panel -->
+    <div id="worldmap-panel" class="hidden">
+      <div class="panel-header"><span>EXTERNAL CONNECTIONS MAP</span><button onclick="toggleWorldMap()">✕</button></div>
+      <canvas id="world-map-canvas" width="500" height="500"></canvas>
+      <div id="worldmap-legend"></div>
+    </div>
+
     <!-- Dossier panel -->
     <aside id="dossier" class="hidden">
       <div id="dossier-header">
         <span id="dossier-title">NODE DOSSIER</span>
         <button id="dossier-close" onclick="closeDossier()">✕</button>
+      </div>
+      <div id="dossier-actions">
+        <button id="block-btn" class="tbtn btn-block" onclick="toggleBlock()">🚫 BLOCK</button>
       </div>
       <div id="dossier-body">
         <div class="field"><label>IP</label><span id="d-ip"></span></div>
@@ -112,6 +124,10 @@
         <div id="cve-section" style="display:none">
           <label>CVEs DETECTED</label>
           <div id="d-cves"></div>
+        </div>
+        <div id="ssl-section" style="display:none">
+          <label>SSL CERTIFICATES</label>
+          <div id="d-ssl"></div>
         </div>
         <div class="field" id="device-type-field" style="display:none">
           <label>DEVICE TYPE</label><span id="d-device-type"></span>

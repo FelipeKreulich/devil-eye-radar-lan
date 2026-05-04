@@ -19,6 +19,16 @@ type CVEEntry struct {
 	Desc     string `json:"desc"`
 }
 
+type SSLCertInfo struct {
+	Port       int    `json:"port"`
+	CommonName string `json:"cn"`
+	Issuer     string `json:"issuer"`
+	Expiry     string `json:"expiry"` // RFC3339
+	SelfSigned bool   `json:"self_signed"`
+	Valid      bool   `json:"valid"`
+	DaysLeft   int    `json:"days_left"`
+}
+
 type Device struct {
 	IP          string         `json:"ip"`
 	MAC         string         `json:"mac"`
@@ -43,6 +53,7 @@ type Device struct {
 	DeviceType  string         `json:"device_type,omitempty"`
 	TopoLayer   int            `json:"topo_layer"`
 	CVEs        []CVEEntry     `json:"cves,omitempty"`
+	SSLCerts    []SSLCertInfo  `json:"ssl_certs,omitempty"`
 	PeerLinks   []string       `json:"peer_links,omitempty"`
 }
 
@@ -53,10 +64,11 @@ type TrafficEvent struct {
 	Proto     string    `json:"proto"`
 	Domain    string    `json:"domain,omitempty"`
 	Details   string    `json:"details,omitempty"`
-	Country   string    `json:"country,omitempty"`
-	Flag      string    `json:"flag,omitempty"`
-	Threat    bool      `json:"threat"`
-	ThreatMsg string    `json:"threat_msg,omitempty"`
+	Country     string    `json:"country,omitempty"`
+	CountryCode string    `json:"country_code,omitempty"`
+	Flag        string    `json:"flag,omitempty"`
+	Threat      bool      `json:"threat"`
+	ThreatMsg   string    `json:"threat_msg,omitempty"`
 }
 
 type BandwidthStat struct {

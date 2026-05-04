@@ -131,6 +131,30 @@ main {
   50%       { box-shadow: 0 0 20px rgba(255,32,32,0.6); }
 }
 
+.tbtn.btn-block {
+  border-color: rgba(255,32,32,0.4);
+  color: var(--red);
+}
+.tbtn.btn-block:hover { border-color: var(--red); background: rgba(255,32,32,0.1); }
+
+.tbtn.btn-unblock {
+  border-color: rgba(0,212,255,0.4);
+  color: var(--cyan);
+}
+.tbtn.btn-unblock:hover { border-color: var(--cyan); background: rgba(0,212,255,0.08); }
+
+#dossier-actions {
+  padding: 6px 12px 0;
+  display: flex;
+  gap: 6px;
+}
+
+#health-score {
+  color: var(--green);
+  font-weight: bold;
+  transition: color 0.5s;
+}
+
 /* ─── Toast notifications ─────────────────────────────────────────────────── */
 #toast-container {
   position: fixed;
@@ -662,3 +686,67 @@ main {
 
 /* ─── Peer link edges (drawn on canvas, no CSS needed, but add feed badge) ── */
 .fbadge.ssl  { color: var(--red); border-color: rgba(255,32,32,0.4); background: rgba(255,32,32,0.07); }
+
+/* ─── SSL cert section in dossier ───────────────────────────────────────────── */
+#ssl-section { margin-top: 8px; margin-bottom: 10px; }
+#ssl-section > label {
+  font-size: 9px; letter-spacing: 2px; color: var(--text-dim); display: block; margin-bottom: 6px;
+}
+#d-ssl { display: flex; flex-direction: column; gap: 4px; }
+.ssl-entry {
+  display: flex; gap: 5px; align-items: center; flex-wrap: wrap;
+  font-size: 10px; padding: 3px 0; border-bottom: 1px solid rgba(0,255,65,0.05);
+}
+.ssl-port   { color: var(--cyan);     flex-shrink: 0; }
+.ssl-cn     { color: var(--green);    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ssl-issuer { color: var(--text-dim); font-size: 9px; flex-shrink: 0; }
+.ssl-self   { font-size: 8px; letter-spacing: 1px; padding: 1px 4px; border: 1px solid rgba(255,215,0,0.5);
+              color: var(--yellow); background: rgba(255,215,0,0.07); flex-shrink: 0; }
+
+/* ─── Globe panel ────────────────────────────────────────────────────────────── */
+#worldmap-panel {
+  position: absolute;
+  top: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 540px;
+  background: rgba(3,6,3,0.97);
+  border: 1px solid rgba(0,255,65,0.5);
+  box-shadow: 0 0 40px rgba(0,255,65,0.18), 0 0 80px rgba(0,255,65,0.06);
+  z-index: 150;
+  transition: opacity 0.2s, transform 0.2s;
+}
+#worldmap-panel.hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(-12px);
+}
+#world-map-canvas {
+  display: block;
+  width: 500px;
+  height: 500px;
+  margin: 8px auto 0;
+  border-top: 1px solid var(--border);
+  cursor: grab;
+  image-rendering: auto;
+}
+#world-map-canvas:active { cursor: grabbing; }
+#worldmap-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  min-height: 32px;
+  background: rgba(0,255,65,0.03);
+}
+.map-legend-item {
+  font-size: 10px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+  letter-spacing: 0.5px;
+}
+.map-legend-item b { color: var(--green); font-weight: bold; }

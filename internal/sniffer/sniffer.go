@@ -14,6 +14,7 @@ import (
 	"github.com/antraz/devil-eye-lan-radar/internal/geo"
 	"github.com/antraz/devil-eye-lan-radar/internal/threat"
 	"github.com/miekg/dns"
+	"golang.org/x/sys/unix"
 )
 
 func htons(i uint16) uint16 { return (i<<8)&0xff00 | i>>8 }
@@ -163,7 +164,17 @@ func (s *Sniffer) Run() {
 		log.Printf("sniffer: bind: %v", err)
 		return
 	}
-	log.Printf("Sniffer: capturing on %s", s.iface.Name)
+
+	// Enable promiscuous mode so we capture forwarded MITM traffic from other devices.
+	mreq := unix.PacketMreq{
+		Ifindex: int32(s.iface.Index),
+		Type:    unix.PACKET_MR_PROMISC,
+	}
+	if err := unix.SetsockoptPacketMreq(fd, unix.SOL_PACKET, unix.PACKET_ADD_MEMBERSHIP, &mreq); err != nil {
+		log.Printf("sniffer: promisc: %v", err)
+	}
+
+	log.Printf("Sniffer: capturing on %s (promiscuous)", s.iface.Name)
 
 	buf := make([]byte, 65536)
 	for {
@@ -341,13 +352,14 @@ func (s *Sniffer) buildTraffic(srcIP, dstIP, proto, domain, details string) api.
 			ev.ThreatMsg = "[" + hit.Category + "] " + hit.Message
 		}
 	}
-	// Async geo for external IPs (non-blocking)
-	go func(ip string, e *api.TrafficEvent) {
-		if info := geo.Lookup(ip); info.Country != "" {
-			e.Country = info.Country
-			e.Flag = info.Flag
-		}
-	}(dstIP, &ev)
+	// Geo: use cached result synchronously; warm cache async on miss
+	if info := geo.LookupCached(dstIP); info.Country != "" {
+		ev.Country = info.Country
+		ev.CountryCode = info.CountryCode
+		ev.Flag = info.Flag
+	} else if !isPrivateIP(dstIP) {
+		go geo.Lookup(dstIP)
+	}
 	return ev
 }
 
