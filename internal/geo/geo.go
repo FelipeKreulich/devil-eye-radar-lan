@@ -13,6 +13,8 @@ type Info struct {
 	Country     string
 	CountryCode string
 	Flag        string
+	Lat         float64
+	Lon         float64
 }
 
 type cache struct {
@@ -62,15 +64,21 @@ func Lookup(ip string) Info {
 }
 
 func fetch(ip string) Info {
-	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("http://ip-api.com/json/%s?fields=country,countryCode", ip))
+	url := "http://ip-api.com/json/?fields=country,countryCode,lat,lon"
+	if ip != "" {
+		url = fmt.Sprintf("http://ip-api.com/json/%s?fields=country,countryCode,lat,lon", ip)
+	}
+	client := &http.Client{Timeout: 4 * time.Second}
+	resp, err := client.Get(url)
 	if err != nil {
 		return Info{}
 	}
 	defer resp.Body.Close()
 	var data struct {
-		Country     string `json:"country"`
-		CountryCode string `json:"countryCode"`
+		Country     string  `json:"country"`
+		CountryCode string  `json:"countryCode"`
+		Lat         float64 `json:"lat"`
+		Lon         float64 `json:"lon"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		return Info{}
@@ -79,7 +87,14 @@ func fetch(ip string) Info {
 		Country:     data.Country,
 		CountryCode: data.CountryCode,
 		Flag:        emojiFlag(data.CountryCode),
+		Lat:         data.Lat,
+		Lon:         data.Lon,
 	}
+}
+
+// LookupSelf returns geo info for the server's own public IP.
+func LookupSelf() Info {
+	return fetch("")
 }
 
 // emojiFlag converts a 2-letter ISO 3166 country code to a flag emoji.

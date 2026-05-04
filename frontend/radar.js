@@ -134,11 +134,12 @@ const CENTROIDS = {
   SN:[-14,14], CM:[12,6], AO:[18,-12], DZ:[2,28], LY:[17,26], TN:[9,34],
 };
 
-// ─── 3D Globe ────────────────────────────────────────────────────────────────
-let globeRotY  = 0.4, globeRotX = -0.28, globeVelY = 0.003;
-let globeAnimId = null, globeDragging = false, globeDragLast = {x:0, y:0};
-
-let GLOBE_HOME = [-14, -51]; // [lat, lon]
+// ─── 3D Globe (D3.js + topojson world-atlas) ─────────────────────────────────
+let globeRotation  = [0, -20];   // [lon, lat] — D3 geoOrthographic format
+let globeVelLon    = 0.25;       // auto-spin deg/frame
+let globeAnimId    = null, globeDragging = false, globeDragLast = {x:0, y:0};
+let GLOBE_HOME     = null;       // [lat, lon] — set dynamically via /api/geo/me
+let _worldGeo      = null;       // loaded once from CDN
 
 // Pre-generated static star field
 const STARS = Array.from({length: 280}, (_, i) => {
@@ -146,146 +147,11 @@ const STARS = Array.from({length: 280}, (_, i) => {
   return [s(i) * 500, s(i + 1000) * 500, 0.15 + s(i + 2000) * 0.85];
 });
 
-// Natural Earth 110m simplified land polygons [[lon, lat], ...]
-const LAND = [
-  // North America
-  [[-168,72],[-166,69],[-164,63],[-167,59],[-162,56],[-153,58],[-149,60],
-   [-141,60],[-136,58],[-132,56],[-130,54],[-126,50],[-124,49],[-124,47],
-   [-124,40],[-122,37],[-120,35],[-118,34],[-117,32],[-115,32],[-112,29],
-   [-110,23],[-106,20],[-97,16],[-90,14],[-83,9],[-77,8],[-76,15],
-   [-72,21],[-67,18],[-65,18],[-66,20],[-74,20],[-78,26],[-80,25],
-   [-80,31],[-76,34],[-75,36],[-73,40],[-70,42],[-70,44],[-67,45],
-   [-65,44],[-61,46],[-58,48],[-55,52],[-56,47],[-65,44],[-68,44],
-   [-70,43],[-73,43],[-76,43],[-79,43],[-82,42],[-83,41],[-86,41],
-   [-87,42],[-87,46],[-90,46],[-90,49],[-95,49],[-100,49],[-104,49],
-   [-110,49],[-116,49],[-120,49],[-122,49],[-124,49],[-128,52],
-   [-130,55],[-134,57],[-136,58],[-140,58],[-144,60],[-148,60],
-   [-152,60],[-154,58],[-158,58],[-162,60],[-165,62],[-168,66],[-168,72]],
-  // Alaska
-  [[-141,60],[-138,59],[-136,57],[-133,55],[-131,56],[-134,58],[-136,59],
-   [-140,58],[-145,60],[-149,61],[-151,60],[-154,58],[-157,56],[-159,55],
-   [-162,54],[-164,54],[-166,56],[-166,60],[-164,63],[-160,62],[-157,58],
-   [-153,58],[-150,61],[-148,60],[-145,61],[-141,60]],
-  // Greenland
-  [[-44,60],[-42,64],[-38,65],[-28,68],[-20,70],[-16,76],[-18,80],
-   [-24,82],[-34,84],[-44,84],[-52,82],[-56,76],[-60,73],[-64,68],
-   [-64,64],[-58,62],[-50,62],[-44,60]],
-  // South America
-  [[-80,10],[-78,8],[-75,12],[-70,12],[-67,12],[-64,10],[-62,8],
-   [-60,7],[-54,4],[-52,4],[-48,0],[-44,-2],[-40,-5],[-36,-6],[-34,-8],
-   [-36,-12],[-38,-16],[-38,-20],[-40,-20],[-42,-22],[-44,-24],[-48,-28],
-   [-50,-29],[-52,-32],[-52,-33],[-54,-36],[-58,-38],[-62,-40],[-64,-42],
-   [-65,-46],[-68,-52],[-68,-56],[-70,-52],[-72,-48],[-72,-42],[-70,-36],
-   [-72,-30],[-70,-22],[-70,-18],[-72,-14],[-76,-10],[-78,-2],[-80,2],[-80,10]],
-  // Europe
-  [[-10,36],[-8,38],[-9,40],[-8,44],[-2,44],[0,44],[4,44],[4,46],
-   [6,48],[8,48],[10,50],[12,48],[14,46],[14,44],[16,42],[18,40],[20,40],
-   [22,40],[24,38],[22,36],[20,38],[18,40],[16,44],[14,50],[12,54],
-   [10,55],[10,56],[12,56],[14,56],[16,56],[18,58],[18,60],[20,62],
-   [22,64],[24,68],[26,70],[28,68],[28,64],[24,60],[22,58],[18,56],
-   [14,56],[12,56],[10,58],[8,58],[6,58],[4,56],[2,54],[0,52],[-2,52],
-   [-4,54],[-6,54],[-4,56],[-2,58],[-6,52],[-8,48],[-10,48],[-10,44],
-   [-8,40],[-10,36]],
-  // Scandinavia
-  [[5,58],[8,58],[10,56],[12,56],[14,56],[16,58],[18,60],[18,62],[16,64],
-   [18,66],[20,68],[22,68],[24,70],[26,70],[28,68],[30,66],[30,62],
-   [28,60],[24,58],[22,56],[20,56],[18,56],[16,56],[14,58],[12,58],
-   [10,58],[8,58],[5,58]],
-  // UK
-  [[-5,50],[-3,50],[0,51],[2,52],[0,54],[-2,56],[-4,58],[-5,58],
-   [-6,57],[-4,54],[-2,52],[-4,50],[-5,50]],
-  // Iceland
-  [[-24,64],[-22,64],[-18,63],[-14,63],[-12,64],[-14,66],[-18,66],[-22,66],[-24,64]],
-  // Africa
-  [[-16,16],[-16,14],[-14,10],[-12,8],[-10,6],[-8,4],[-4,4],[0,5],
-   [4,4],[8,4],[10,2],[12,0],[14,-2],[16,-4],[18,-6],[20,-8],[22,-10],
-   [24,-12],[26,-16],[28,-18],[30,-20],[32,-22],[34,-24],[34,-28],
-   [32,-30],[28,-34],[26,-34],[22,-34],[20,-36],[18,-36],[16,-34],
-   [16,-30],[14,-24],[12,-18],[10,-12],[8,-6],[6,-2],[4,2],[2,6],
-   [0,6],[-4,6],[-8,4],[-10,6],[-12,8],[-14,12],[-16,14],[-16,16]],
-  // Madagascar
-  [[44,-12],[48,-14],[50,-16],[50,-20],[50,-24],[48,-26],[46,-26],
-   [44,-24],[44,-20],[44,-14],[44,-12]],
-  // Arabian Peninsula
-  [[36,30],[38,34],[42,36],[46,38],[48,30],[52,24],[56,22],[58,20],
-   [58,18],[56,16],[54,12],[52,12],[50,12],[46,12],[42,12],[40,14],
-   [38,16],[38,20],[36,24],[36,28],[36,30]],
-  // Turkey/Anatolia
-  [[26,42],[28,42],[32,42],[36,42],[38,40],[40,40],[42,38],[44,38],
-   [42,36],[38,36],[34,38],[30,42],[28,42],[26,42]],
-  // Asia main
-  [[26,38],[30,42],[34,46],[38,48],[42,48],[46,48],[50,46],[52,44],
-   [54,46],[58,50],[62,52],[66,56],[70,58],[74,62],[78,66],[82,68],
-   [86,72],[92,74],[100,72],[108,72],[112,70],[118,70],[124,68],
-   [128,68],[132,64],[134,56],[134,50],[136,46],[138,40],[138,36],
-   [136,34],[134,30],[132,26],[130,24],[128,22],[124,22],[120,20],
-   [116,18],[112,14],[108,10],[104,4],[102,2],[100,4],[100,8],[100,12],
-   [100,14],[102,16],[104,18],[106,22],[110,22],[112,22],[116,22],
-   [118,24],[120,28],[122,30],[124,28],[124,22],[122,18],[120,12],
-   [116,6],[112,2],[110,-2],[108,-6],[110,-8],[112,-6],[116,-2],
-   [120,4],[122,10],[124,18],[126,22],[128,26],[126,28],[122,22],
-   [118,18],[114,18],[110,18],[106,14],[104,10],[102,12],[98,16],
-   [94,20],[90,24],[88,24],[86,26],[82,26],[80,26],[78,22],[76,16],
-   [72,12],[70,14],[66,20],[62,22],[58,24],[54,26],[50,28],[48,30],
-   [46,34],[44,38],[40,42],[36,46],[32,46],[30,42],[26,38]],
-  // Indian Peninsula
-  [[68,22],[72,22],[74,20],[76,14],[78,10],[80,10],[82,14],[80,20],[76,22],[68,22]],
-  // SE Asia / Indochina
-  [[100,22],[100,20],[102,18],[104,16],[104,12],[102,8],[100,6],[102,4],
-   [100,4],[98,6],[96,8],[98,12],[98,16],[100,18],[100,22]],
-  // Japan (Honshu)
-  [[130,32],[132,34],[134,36],[136,36],[138,38],[140,40],[140,42],
-   [142,44],[144,44],[142,42],[140,38],[138,34],[136,32],[134,32],
-   [132,32],[130,32]],
-  // Borneo
-  [[108,2],[110,4],[114,6],[116,6],[118,6],[118,4],[116,2],[114,0],
-   [110,0],[108,2]],
-  // Sumatra
-  [[96,6],[98,6],[102,4],[106,2],[106,-2],[106,-4],[104,-4],[100,-2],
-   [98,2],[96,4],[96,6]],
-  // Java
-  [[106,-6],[108,-6],[110,-8],[112,-8],[114,-8],[116,-8],[114,-8],
-   [112,-8],[110,-6],[108,-6],[106,-6]],
-  // Philippines
-  [[120,18],[122,16],[124,14],[122,12],[120,12],[120,14],[118,16],[120,18]],
-  // Australia
-  [[114,-22],[116,-20],[120,-18],[124,-16],[128,-14],[130,-12],[132,-12],
-   [134,-12],[136,-12],[138,-14],[140,-14],[142,-16],[144,-20],[148,-20],
-   [150,-24],[152,-26],[152,-30],[150,-34],[148,-36],[146,-38],[144,-38],
-   [142,-38],[140,-36],[138,-36],[136,-36],[134,-34],[132,-34],[130,-34],
-   [128,-32],[126,-30],[124,-28],[122,-26],[120,-24],[118,-24],[116,-22],
-   [114,-22]],
-  // New Zealand
-  [[172,-38],[174,-36],[176,-36],[178,-38],[176,-40],[174,-40],[172,-38]],
-  // Antarctica
-  [[-180,-68],[-150,-66],[-120,-64],[-90,-68],[-60,-64],[-30,-66],
-   [0,-66],[30,-66],[60,-64],[90,-68],[120,-66],[150,-66],[180,-68],
-   [180,-90],[-180,-90],[-180,-68]],
-  // Iberian Peninsula
-  [[-10,36],[-8,36],[-4,36],[0,38],[2,40],[0,44],[-2,44],[-6,44],
-   [-8,44],[-10,42],[-10,38],[-10,36]],
-  // Italy
-  [[8,44],[10,44],[12,44],[14,40],[16,38],[16,36],[14,38],[12,38],
-   [10,42],[8,44]],
-  // Kamchatka
-  [[158,52],[160,54],[162,56],[162,52],[160,50],[158,52]],
-  // Korea
-  [[126,34],[128,34],[130,36],[128,38],[126,38],[124,36],[126,34]],
-  // Taiwan
-  [[120,22],[122,22],[122,24],[120,24],[120,22]],
-  // Sri Lanka
-  [[80,10],[82,10],[82,8],[80,8],[80,10]],
-];
-
-// Great-circle helpers
-function ll2xyz(latDeg, lonDeg) {
-  const a = latDeg * Math.PI / 180, b = lonDeg * Math.PI / 180;
-  return [Math.cos(a)*Math.cos(b), Math.sin(a), Math.cos(a)*Math.sin(b)];
-}
+// Great-circle slerp (still needed for animated arc dots)
 function slerp3(v1, v2, t) {
   const d  = Math.max(-1, Math.min(1, v1[0]*v2[0]+v1[1]*v2[1]+v1[2]*v2[2]));
   const om = Math.acos(d);
-  if (om < 1e-6) return [v1[0], v1[1], v1[2]];
+  if (om < 1e-6) return [...v1];
   const s = Math.sin(om);
   return [
     (Math.sin((1-t)*om)*v1[0]+Math.sin(t*om)*v2[0])/s,
@@ -294,20 +160,31 @@ function slerp3(v1, v2, t) {
   ];
 }
 
-// Sutherland-Hodgman clip polygon to front hemisphere (d >= 0)
-function _clipHemisphere(pts) {
-  const out = [];
-  const n = pts.length;
-  for (let i = 0; i < n; i++) {
-    const a = pts[i], b = pts[(i + 1) % n];
-    const aIn = a.d >= 0, bIn = b.d >= 0;
-    if (aIn) out.push(a);
-    if (aIn !== bIn) {
-      const t = a.d / (a.d - b.d);
-      out.push({ sx: a.sx + t * (b.sx - a.sx), sy: a.sy + t * (b.sy - a.sy), d: 0 });
+// Fetch world topology once from CDN
+async function _loadWorldGeo() {
+  if (_worldGeo || typeof d3 === 'undefined' || typeof topojson === 'undefined') return;
+  try {
+    const resp = await fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json');
+    const topo  = await resp.json();
+    _worldGeo = {
+      land:     topojson.feature(topo, topo.objects.land),
+      borders:  topojson.mesh(topo, topo.objects.countries, (a, b) => a !== b),
+      graticule: d3.geoGraticule()(),
+    };
+  } catch(e) { console.warn('Globe: could not load world topology', e); }
+}
+
+// Fetch server's real location from backend
+async function _fetchHomeLocation() {
+  try {
+    const res  = await fetch('/api/geo/me');
+    const data = await res.json();
+    if (data.lat != null && data.lon != null) {
+      GLOBE_HOME = [data.lat, data.lon];
+      // Centre globe on home location initially
+      globeRotation = [-data.lon, -data.lat * 0.5];
     }
-  }
-  return out;
+  } catch(e) {}
 }
 
 function toggleWorldMap() {
@@ -320,6 +197,8 @@ function toggleWorldMap() {
 
 function startGlobe() {
   if (globeAnimId) return;
+  _loadWorldGeo();
+  if (!GLOBE_HOME) _fetchHomeLocation();
   const cv = document.getElementById('world-map-canvas');
   if (!cv) return;
   cv.addEventListener('mousedown',  _globeDown);
@@ -343,21 +222,21 @@ function stopGlobe() {
 function _globeDown(e) {
   globeDragging = true;
   globeDragLast = { x: e.clientX, y: e.clientY };
-  globeVelY = 0;
+  globeVelLon = 0;
   e.preventDefault();
 }
 function _globeMove(e) {
   if (!globeDragging) return;
   const dx = e.clientX - globeDragLast.x;
   const dy = e.clientY - globeDragLast.y;
-  globeRotY += dx * 0.006;
-  globeRotX  = Math.max(-1.35, Math.min(1.35, globeRotX + dy * 0.006));
-  globeVelY  = dx * 0.002;
+  globeRotation[0] += dx * 0.35;
+  globeRotation[1]  = Math.max(-85, Math.min(85, globeRotation[1] - dy * 0.35));
+  globeVelLon = dx * 0.12;
   globeDragLast = { x: e.clientX, y: e.clientY };
 }
 function _globeUp() {
   globeDragging = false;
-  if (Math.abs(globeVelY) < 0.001) globeVelY = 0.004;
+  if (Math.abs(globeVelLon) < 0.05) globeVelLon = 0.25;
 }
 
 function drawGlobe() {
@@ -368,32 +247,36 @@ function drawGlobe() {
   const cx = W / 2, cy = H / 2;
   const R  = Math.min(W, H) / 2 - 18;
 
+  // Auto-spin with momentum
   if (!globeDragging) {
-    globeVelY = globeVelY * 0.97 + (globeVelY > 0 ? 0.00006 : -0.00006);
-    if (Math.abs(globeVelY) < 0.0008) globeVelY = 0.003;
-    globeRotY += globeVelY;
+    globeVelLon = globeVelLon * 0.97 + (globeVelLon > 0 ? 0.004 : -0.004);
+    if (Math.abs(globeVelLon) < 0.05) globeVelLon = 0.25;
+    globeRotation[0] += globeVelLon;
   }
 
-  // Projection: lat/lon → screen + depth
-  function proj(latDeg, lonDeg) {
-    const lat = latDeg * Math.PI / 180, lon = lonDeg * Math.PI / 180;
-    let x = Math.cos(lat)*Math.cos(lon), y = Math.sin(lat), z = Math.cos(lat)*Math.sin(lon);
-    const cY = Math.cos(globeRotY), sY = Math.sin(globeRotY);
-    const x1 = x*cY - z*sY, z1 = x*sY + z*cY;
-    const cX = Math.cos(globeRotX), sX = Math.sin(globeRotX);
-    const y2 = y*cX - z1*sX, z2 = y*sX + z1*cX;
-    return { sx: cx + R*x1, sy: cy - R*y2, d: z2 };
-  }
+  // D3 orthographic projection
+  const projection = (typeof d3 !== 'undefined')
+    ? d3.geoOrthographic()
+        .scale(R)
+        .translate([cx, cy])
+        .rotate([globeRotation[0], globeRotation[1]])
+        .clipAngle(90)
+    : null;
 
+  const path = projection
+    ? d3.geoPath().projection(projection).context(wc)
+    : null;
+
+  // ── Draw ─────────────────────────────────────────────────────────────────────
   wc.clearRect(0, 0, W, H);
 
-  // 1. Space background
+  // 1. Deep space
   wc.fillStyle = '#00010d';
   wc.fillRect(0, 0, W, H);
 
   // 2. Stars
   for (const [sx, sy, br] of STARS) {
-    wc.globalAlpha = br * 0.9;
+    wc.globalAlpha = br * 0.85;
     wc.fillStyle = '#ffffff';
     wc.fillRect(sx, sy, br < 0.5 ? 1 : 1.5, br < 0.5 ? 1 : 1.5);
   }
@@ -401,14 +284,14 @@ function drawGlobe() {
 
   // 3. Outer atmosphere glow
   const atmOut = wc.createRadialGradient(cx, cy, R * 0.96, cx, cy, R * 1.28);
-  atmOut.addColorStop(0, 'rgba(30,110,220,0.50)');
+  atmOut.addColorStop(0,    'rgba(30,110,220,0.50)');
   atmOut.addColorStop(0.35, 'rgba(20,70,160,0.18)');
-  atmOut.addColorStop(0.7, 'rgba(10,30,100,0.06)');
-  atmOut.addColorStop(1, 'rgba(0,0,0,0)');
+  atmOut.addColorStop(0.7,  'rgba(10,30,100,0.06)');
+  atmOut.addColorStop(1,    'rgba(0,0,0,0)');
   wc.beginPath(); wc.arc(cx, cy, R * 1.28, 0, Math.PI * 2);
   wc.fillStyle = atmOut; wc.fill();
 
-  // 4. Ocean sphere (realistic deep blue, lit from top-left)
+  // 4. Ocean sphere
   const ocean = wc.createRadialGradient(cx - R*0.35, cy - R*0.35, R*0.02, cx + R*0.15, cy + R*0.2, R*1.05);
   ocean.addColorStop(0,    '#2a6faa');
   ocean.addColorStop(0.25, '#16457a');
@@ -418,174 +301,167 @@ function drawGlobe() {
   wc.beginPath(); wc.arc(cx, cy, R, 0, Math.PI * 2);
   wc.fillStyle = ocean; wc.fill();
 
-  // 5. Continent polygons — filled, clipped to front hemisphere
-  wc.save();
-  wc.beginPath(); wc.arc(cx, cy, R, 0, Math.PI * 2); wc.clip();
+  if (!_worldGeo || !path) {
+    // Loading indicator
+    wc.fillStyle = 'rgba(40,120,255,0.6)';
+    wc.font = '13px "Courier New"';
+    wc.textAlign = 'center'; wc.textBaseline = 'middle';
+    wc.fillText('LOADING WORLD DATA...', cx, cy);
+  } else {
+    // 5. Land (D3 geoPath handles hemisphere clipping automatically)
+    wc.save();
+    wc.beginPath(); wc.arc(cx, cy, R, 0, Math.PI * 2); wc.clip();
 
-  // Land color gradient: sun from top-left
-  const landLit = wc.createRadialGradient(cx - R*0.38, cy - R*0.42, 0, cx + R*0.2, cy + R*0.25, R*1.3);
-  landLit.addColorStop(0,    '#6dbb3a');
-  landLit.addColorStop(0.28, '#4a9228');
-  landLit.addColorStop(0.55, '#356e1c');
-  landLit.addColorStop(0.78, '#234d10');
-  landLit.addColorStop(1,    '#102608');
-
-  for (const poly of LAND) {
-    const pts3 = poly.map(([lon, lat]) => proj(lat, lon));
-    const clipped = _clipHemisphere(pts3);
-    if (clipped.length < 3) continue;
-
-    // Ice/Antarctica: high average latitude → white
-    const avgLat = poly.reduce((s, [, la]) => s + la, 0) / poly.length;
-    const isIce  = Math.abs(avgLat) > 64;
+    const landGrad = wc.createRadialGradient(cx - R*0.38, cy - R*0.42, 0, cx + R*0.2, cy + R*0.25, R*1.3);
+    landGrad.addColorStop(0,    '#6dbb3a');
+    landGrad.addColorStop(0.28, '#4a9228');
+    landGrad.addColorStop(0.55, '#356e1c');
+    landGrad.addColorStop(0.78, '#234d10');
+    landGrad.addColorStop(1,    '#102608');
 
     wc.beginPath();
-    wc.moveTo(clipped[0].sx, clipped[0].sy);
-    for (let i = 1; i < clipped.length; i++) wc.lineTo(clipped[i].sx, clipped[i].sy);
-    wc.closePath();
-
-    if (isIce) {
-      wc.fillStyle = 'rgba(195,225,248,0.88)';
-    } else {
-      wc.fillStyle = landLit;
-    }
+    path(_worldGeo.land);
+    wc.fillStyle = landGrad;
     wc.fill();
 
-    // Subtle coast border
-    wc.strokeStyle = isIce ? 'rgba(220,240,255,0.4)' : 'rgba(30,80,15,0.5)';
-    wc.lineWidth = 0.6;
+    // Country borders
+    wc.beginPath();
+    path(_worldGeo.borders);
+    wc.strokeStyle = 'rgba(0,15,0,0.45)';
+    wc.lineWidth = 0.5;
     wc.stroke();
+
+    // Graticule (subtle blue grid)
+    wc.beginPath();
+    path(_worldGeo.graticule);
+    wc.strokeStyle = 'rgba(80,160,255,0.07)';
+    wc.lineWidth = 0.35;
+    wc.stroke();
+
+    // Limb darkening
+    const limb = wc.createRadialGradient(cx, cy, R * 0.72, cx, cy, R);
+    limb.addColorStop(0,    'rgba(0,0,0,0)');
+    limb.addColorStop(0.75, 'rgba(0,5,20,0.22)');
+    limb.addColorStop(1,    'rgba(0,8,40,0.68)');
+    wc.beginPath(); wc.arc(cx, cy, R, 0, Math.PI * 2);
+    wc.fillStyle = limb; wc.fill();
+
+    wc.restore();
   }
 
-  // 6. Limb darkening (edge of sphere goes dark, simulates atmosphere depth)
-  const limb = wc.createRadialGradient(cx, cy, R * 0.72, cx, cy, R);
-  limb.addColorStop(0,   'rgba(0,0,0,0)');
-  limb.addColorStop(0.75, 'rgba(0,5,20,0.22)');
-  limb.addColorStop(1,   'rgba(0,8,40,0.68)');
-  wc.beginPath(); wc.arc(cx, cy, R, 0, Math.PI * 2);
-  wc.fillStyle = limb; wc.fill();
-
-  // 7. Subtle graticule (blue, barely visible)
-  function grat(ptsArr, alpha) {
-    wc.strokeStyle = `rgba(80,160,255,${alpha})`; wc.lineWidth = 0.35;
-    wc.beginPath(); let on = false;
-    for (const [la, lo] of ptsArr) {
-      const p = proj(la, lo);
-      if (p.d > 0) { if (!on) { wc.moveTo(p.sx, p.sy); on = true; } else wc.lineTo(p.sx, p.sy); }
-      else on = false;
-    }
-    wc.stroke();
-  }
-  const latRow = (la) => Array.from({length: 121}, (_, i) => [la, -180 + i*3]);
-  const lonCol = (lo) => Array.from({length:  61}, (_, i) => [-90 + i*3, lo]);
-  for (let la = -60; la <= 60; la += 30) grat(latRow(la), la === 0 ? 0.18 : 0.07);
-  for (let lo = -180; lo < 180; lo += 30) grat(lonCol(lo), 0.07);
-
-  wc.restore(); // end globe clip
-
-  // 8. Inner atmosphere haze (thin bright ring at limb)
-  const atmIn = wc.createRadialGradient(cx, cy, R * 0.92, cx, cy, R * 1.02);
+  // 6. Atmosphere inner rim
+  const atmIn = wc.createRadialGradient(cx, cy, R * 0.92, cx, cy, R * 1.03);
   atmIn.addColorStop(0,   'rgba(60,140,255,0.0)');
-  atmIn.addColorStop(0.5, 'rgba(60,140,255,0.22)');
+  atmIn.addColorStop(0.5, 'rgba(60,140,255,0.24)');
   atmIn.addColorStop(1,   'rgba(100,180,255,0.0)');
-  wc.beginPath(); wc.arc(cx, cy, R * 1.02, 0, Math.PI * 2);
+  wc.beginPath(); wc.arc(cx, cy, R * 1.03, 0, Math.PI * 2);
   wc.fillStyle = atmIn; wc.fill();
 
-  // 9. Connection arcs + animated packets
-  const now      = Date.now();
-  const arcPhase = (now * 0.00038) % 1;
-  const vh       = ll2xyz(GLOBE_HOME[0], GLOBE_HOME[1]);
-  const ARC_STEPS = 60;
+  // 7. Connection arcs + animated packets
+  if (projection) {
+    const now      = Date.now();
+    const arcPhase = (now * 0.00038) % 1;
+    const ARC_STEPS = 80;
 
-  wc.save();
-  wc.beginPath(); wc.arc(cx, cy, R, 0, Math.PI * 2); wc.clip();
+    wc.save();
+    wc.beginPath(); wc.arc(cx, cy, R, 0, Math.PI * 2); wc.clip();
 
-  for (const [cc, count] of externalTraffic) {
-    const pos = CENTROIDS[cc];
-    if (!pos) continue;
-    const vd = ll2xyz(pos[1], pos[0]);
-    const pts = [];
-    for (let i = 0; i <= ARC_STEPS; i++) {
-      const v = slerp3(vd, vh, i / ARC_STEPS);
-      const la = Math.asin(Math.max(-1, Math.min(1, v[1]))) * 180 / Math.PI;
-      const lo = Math.atan2(v[2], v[0]) * 180 / Math.PI;
-      pts.push(proj(la, lo));
+    for (const [cc, count] of externalTraffic) {
+      const pos = CENTROIDS[cc];
+      if (!pos) continue;
+      const destLonLat = pos;                          // [lon, lat]
+      const homeLonLat = GLOBE_HOME ? [GLOBE_HOME[1], GLOBE_HOME[0]] : null;
+
+      // Base arc via D3 great-circle LineString (auto-clipped)
+      if (homeLonLat) {
+        const arcFeature = { type: 'LineString', coordinates: [destLonLat, homeLonLat] };
+        wc.beginPath();
+        path(arcFeature);
+        wc.strokeStyle = 'rgba(0,220,255,0.30)';
+        wc.lineWidth = 1.3;
+        wc.stroke();
+      }
+
+      // Animated packets using d3.geoInterpolate
+      const nPkts = Math.min(3, 1 + Math.floor(Math.log1p(count)));
+      const ph0 = ((cc.charCodeAt(0) * 137 + (cc.charCodeAt(1) || 0) * 31) % 1000) / 1000;
+      const interp = homeLonLat ? d3.geoInterpolate(destLonLat, homeLonLat) : null;
+
+      if (!interp) continue;
+      for (let i = 0; i < nPkts; i++) {
+        const t   = (arcPhase + ph0 + i / nPkts) % 1;
+        const pos2 = interp(t);                        // [lon, lat]
+        const px  = projection(pos2);                  // [sx, sy] or null (back hemisphere)
+        if (!px) continue;
+        const fade = Math.sin(t * Math.PI);
+        if (fade < 0.06) continue;
+        // Depth fade: points near limb get darker
+        const distR = Math.hypot(px[0] - cx, px[1] - cy) / R;
+        const depth = Math.max(0, 1 - distR * distR);
+        const alpha = fade * Math.sqrt(depth);
+        if (alpha < 0.05) continue;
+        wc.beginPath(); wc.arc(px[0], px[1], 2.8 * fade, 0, Math.PI * 2);
+        wc.fillStyle  = `rgba(0,220,255,${0.95 * alpha})`;
+        wc.shadowBlur = 10; wc.shadowColor = '#00dcff';
+        wc.fill(); wc.shadowBlur = 0;
+      }
     }
 
-    // Base arc
-    wc.beginPath(); let on = false;
-    for (const p of pts) {
-      if (p.d > 0) { if (!on) { wc.moveTo(p.sx, p.sy); on = true; } else wc.lineTo(p.sx, p.sy); }
-      else on = false;
-    }
-    wc.strokeStyle = 'rgba(0,220,255,0.28)'; wc.lineWidth = 1.2; wc.stroke();
-
-    // Animated packets
-    const nPkts = Math.min(3, 1 + Math.floor(Math.log1p(count)));
-    const ph0 = ((cc.charCodeAt(0) * 137 + (cc.charCodeAt(1) || 0) * 31) % 1000) / 1000;
-    for (let i = 0; i < nPkts; i++) {
-      const t   = (arcPhase + ph0 + i / nPkts) % 1;
-      const idx = Math.floor(t * ARC_STEPS);
-      const fr  = t * ARC_STEPS - idx;
-      if (idx >= pts.length - 1) continue;
-      const pa = pts[idx], pb = pts[idx + 1];
-      const depth = pa.d + fr * (pb.d - pa.d);
-      if (depth <= 0) continue;
-      const fade = Math.sin(t * Math.PI) * Math.min(1, depth * 2.5);
-      if (fade < 0.06) continue;
-      const px = pa.sx + fr * (pb.sx - pa.sx);
-      const py = pa.sy + fr * (pb.sy - pa.sy);
-      wc.beginPath(); wc.arc(px, py, 2.6 * fade, 0, Math.PI * 2);
-      wc.fillStyle  = `rgba(0,220,255,${0.95 * fade})`;
-      wc.shadowBlur = 10; wc.shadowColor = '#00dcff';
+    // 8. Country traffic dots
+    for (const [cc, count] of externalTraffic) {
+      const pos = CENTROIDS[cc];
+      if (!pos) continue;
+      const px = projection(pos);
+      if (!px) continue;
+      const distR = Math.hypot(px[0] - cx, px[1] - cy) / R;
+      const fade  = Math.max(0, Math.sqrt(1 - distR * distR));
+      if (fade < 0.05) continue;
+      const now2  = Date.now();
+      const rBase = 3 + Math.min(Math.log1p(count) * 2.5, 11);
+      const pulse = 1 + 0.28 * Math.sin(now2 * 0.0025 + cc.charCodeAt(0) * 1.9);
+      const r = rBase * pulse * fade;
+      const grd = wc.createRadialGradient(px[0], px[1], 0, px[0], px[1], r * 3);
+      grd.addColorStop(0,   `rgba(0,255,65,${0.8 * fade})`);
+      grd.addColorStop(0.4, `rgba(0,255,65,${0.25 * fade})`);
+      grd.addColorStop(1,   'rgba(0,255,65,0)');
+      wc.beginPath(); wc.arc(px[0], px[1], r * 3, 0, Math.PI * 2); wc.fillStyle = grd; wc.fill();
+      wc.beginPath(); wc.arc(px[0], px[1], Math.max(1.5, r * 0.38), 0, Math.PI * 2);
+      wc.fillStyle = `rgba(0,255,65,${fade})`; wc.shadowBlur = 8; wc.shadowColor = '#00ff41';
       wc.fill(); wc.shadowBlur = 0;
+      if (fade > 0.5) {
+        wc.fillStyle = `rgba(0,255,65,${Math.min(1, fade)})`;
+        wc.font = `bold ${Math.max(7, Math.floor(10 * fade))}px "Courier New"`;
+        wc.textAlign = 'center'; wc.textBaseline = 'bottom';
+        wc.fillText(cc, px[0], px[1] - r - 2);
+      }
     }
-  }
 
-  // 10. Country traffic dots
-  for (const [cc, count] of externalTraffic) {
-    const pos = CENTROIDS[cc];
-    if (!pos) continue;
-    const p = proj(pos[1], pos[0]);
-    if (p.d <= 0) continue;
-    const fade  = Math.min(1, p.d * 1.4);
-    const rBase = 3 + Math.min(Math.log1p(count) * 2.5, 11);
-    const pulse = 1 + 0.28 * Math.sin(now * 0.0025 + cc.charCodeAt(0) * 1.9);
-    const r = rBase * pulse * fade;
-    const grd = wc.createRadialGradient(p.sx, p.sy, 0, p.sx, p.sy, r * 3);
-    grd.addColorStop(0,   `rgba(0,255,65,${0.8 * fade})`);
-    grd.addColorStop(0.4, `rgba(0,255,65,${0.25 * fade})`);
-    grd.addColorStop(1,   'rgba(0,255,65,0)');
-    wc.beginPath(); wc.arc(p.sx, p.sy, r * 3, 0, Math.PI * 2); wc.fillStyle = grd; wc.fill();
-    wc.beginPath(); wc.arc(p.sx, p.sy, Math.max(1.5, r * 0.38), 0, Math.PI * 2);
-    wc.fillStyle = `rgba(0,255,65,${fade})`; wc.shadowBlur = 8; wc.shadowColor = '#00ff41';
-    wc.fill(); wc.shadowBlur = 0;
-    if (p.d > 0.28) {
-      wc.fillStyle = `rgba(0,255,65,${Math.min(1, fade * 1.2)})`;
-      wc.font = `bold ${Math.max(7, Math.floor(10 * fade))}px "Courier New"`;
-      wc.textAlign = 'center'; wc.textBaseline = 'bottom';
-      wc.fillText(cc, p.sx, p.sy - r - 2);
+    // 9. Home marker
+    if (GLOBE_HOME) {
+      const homeLonLat = [GLOBE_HOME[1], GLOBE_HOME[0]];
+      const hpx = projection(homeLonLat);
+      if (hpx) {
+        const distR = Math.hypot(hpx[0] - cx, hpx[1] - cy) / R;
+        const hFade = Math.max(0, Math.sqrt(1 - distR * distR));
+        if (hFade > 0.05) {
+          const now2   = Date.now();
+          const hPulse = 1 + 0.3 * Math.sin(now2 * 0.003);
+          wc.beginPath(); wc.arc(hpx[0], hpx[1], 5 * hPulse * hFade, 0, Math.PI * 2);
+          wc.fillStyle = `rgba(255,215,0,${hFade})`;
+          wc.shadowBlur = 18; wc.shadowColor = '#ffd700';
+          wc.fill(); wc.shadowBlur = 0;
+        }
+      }
     }
+
+    wc.restore();
   }
 
-  // 11. Home marker (yellow pulse)
-  const ph = proj(GLOBE_HOME[0], GLOBE_HOME[1]);
-  if (ph.d > 0) {
-    const hFade  = Math.min(1, ph.d * 1.5);
-    const hPulse = 1 + 0.3 * Math.sin(now * 0.003);
-    wc.beginPath(); wc.arc(ph.sx, ph.sy, 5 * hPulse * hFade, 0, Math.PI * 2);
-    wc.fillStyle = `rgba(255,215,0,${hFade})`;
-    wc.shadowBlur = 18; wc.shadowColor = '#ffd700';
-    wc.fill(); wc.shadowBlur = 0;
-  }
-
-  wc.restore();
-
-  // 12. Globe rim (blue atmospheric ring)
+  // 10. Globe rim (atmospheric blue ring)
   wc.beginPath(); wc.arc(cx, cy, R, 0, Math.PI * 2);
   wc.strokeStyle = 'rgba(50,140,255,0.65)'; wc.lineWidth = 2.2; wc.stroke();
 
-  // 13. Specular highlight (sun reflection, top-left)
+  // 11. Specular highlight
   const shine = wc.createRadialGradient(cx - R*0.4, cy - R*0.42, 0, cx - R*0.2, cy - R*0.2, R*0.6);
   shine.addColorStop(0,   'rgba(255,255,255,0.14)');
   shine.addColorStop(0.4, 'rgba(200,230,255,0.05)');
@@ -593,7 +469,7 @@ function drawGlobe() {
   wc.beginPath(); wc.arc(cx, cy, R, 0, Math.PI * 2);
   wc.fillStyle = shine; wc.fill();
 
-  // 14. Legend
+  // 12. Legend
   const legEl = document.getElementById('worldmap-legend');
   if (legEl) {
     const top = [...externalTraffic.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
@@ -602,6 +478,7 @@ function drawGlobe() {
       : '<span style="color:#334466;font-size:10px">no external traffic yet</span>';
   }
 }
+
 
 // ─── WebSocket ────────────────────────────────────────────────────────────────
 function connect() {

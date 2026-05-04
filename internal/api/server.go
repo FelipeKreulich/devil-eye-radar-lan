@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/antraz/devil-eye-lan-radar/internal/geo"
 	"github.com/gorilla/websocket"
 )
 
@@ -166,6 +167,17 @@ func (h *Hub) Listen(addr string, staticFS fs.FS) error {
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.FS(staticFS)))
 	mux.HandleFunc("/ws", h.wsHandler)
+
+	mux.HandleFunc("/api/geo/me", func(w http.ResponseWriter, r *http.Request) {
+		info := geo.LookupSelf()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"lat":     info.Lat,
+			"lon":     info.Lon,
+			"country": info.Country,
+			"cc":      info.CountryCode,
+		})
+	})
 
 	mux.HandleFunc("/api/devices", func(w http.ResponseWriter, r *http.Request) {
 		h.mu.RLock()
