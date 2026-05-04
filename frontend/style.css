@@ -709,10 +709,10 @@ main {
   top: 52px;
   left: 50%;
   transform: translateX(-50%);
-  width: 540px;
-  background: rgba(3,6,3,0.97);
-  border: 1px solid rgba(0,255,65,0.5);
-  box-shadow: 0 0 40px rgba(0,255,65,0.18), 0 0 80px rgba(0,255,65,0.06);
+  width: 544px;
+  background: rgba(0,1,12,0.97);
+  border: 1px solid rgba(40,120,255,0.45);
+  box-shadow: 0 0 50px rgba(20,80,200,0.22), 0 0 100px rgba(10,40,120,0.10);
   z-index: 150;
   transition: opacity 0.2s, transform 0.2s;
 }
@@ -721,12 +721,15 @@ main {
   pointer-events: none;
   transform: translateX(-50%) translateY(-12px);
 }
+#worldmap-panel .panel-header {
+  border-bottom: 1px solid rgba(40,120,255,0.3);
+}
 #world-map-canvas {
   display: block;
-  width: 500px;
-  height: 500px;
-  margin: 8px auto 0;
-  border-top: 1px solid var(--border);
+  width: 508px;
+  height: 508px;
+  margin: 6px auto 0;
+  border-top: 1px solid rgba(40,120,255,0.2);
   cursor: grab;
   image-rendering: auto;
 }
@@ -736,9 +739,9 @@ main {
   flex-wrap: wrap;
   gap: 10px;
   padding: 8px 14px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid rgba(40,120,255,0.2);
   min-height: 32px;
-  background: rgba(0,255,65,0.03);
+  background: rgba(0,10,40,0.4);
 }
 .map-legend-item {
   font-size: 10px;
