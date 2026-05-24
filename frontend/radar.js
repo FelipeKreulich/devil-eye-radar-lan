@@ -1849,6 +1849,13 @@ function renderDossier(dev) {
   }
 
   set('d-ip',       dev.ip       || '—');
+  const ipv6Row = document.getElementById('d-ipv6-row');
+  if (dev.ipv6_addrs && dev.ipv6_addrs.length > 0) {
+    set('d-ipv6', dev.ipv6_addrs.join(' / '));
+    ipv6Row.style.display = '';
+  } else {
+    ipv6Row.style.display = 'none';
+  }
   set('d-mac',      dev.mac      || '—');
   set('d-vendor',   dev.vendor   || '—');
   set('d-hostname', dev.hostname || '—');

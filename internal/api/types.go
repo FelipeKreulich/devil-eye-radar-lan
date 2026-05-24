@@ -32,6 +32,7 @@ type SSLCertInfo struct {
 type Device struct {
 	IP          string         `json:"ip"`
 	MAC         string         `json:"mac"`
+	IPv6Addrs   []string       `json:"ipv6_addrs,omitempty"`
 	Hostname    string         `json:"hostname"`
 	Vendor      string         `json:"vendor"`
 	OS          string         `json:"os"`

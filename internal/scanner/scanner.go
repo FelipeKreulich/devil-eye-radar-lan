@@ -118,6 +118,12 @@ func (s *Scanner) scan() {
 		log.Printf("ARP scan error: %v", err)
 	}
 
+	ndpEntries, ndpErr := NDPScan(s.iface, 2*time.Second)
+	if ndpErr != nil {
+		log.Printf("NDP scan error: %v", ndpErr)
+	}
+	macToIPv6 := MACToIPv6(ndpEntries)
+
 	mdnsCh := make(chan struct{ h map[string]string; t map[string]string }, 1)
 	go func() {
 		h, t := MDNSQuery(2 * time.Second)
@@ -163,6 +169,7 @@ func (s *Scanner) scan() {
 				CountryCode: meta.Code,
 				Timeline:    meta.Timeline,
 				DeviceType:  mdnsTypes[ip],
+				IPv6Addrs:   macToIPv6[macStr],
 			}
 			go s.enrich(dev)
 
@@ -222,6 +229,10 @@ func (s *Scanner) scan() {
 			}
 			if mdnsTypes[ip] != "" && existing.DeviceType == "" {
 				existing.DeviceType = mdnsTypes[ip]
+				changed = true
+			}
+			if addrs := macToIPv6[existing.MAC]; len(addrs) > 0 {
+				existing.IPv6Addrs = addrs
 				changed = true
 			}
 			s.mu.Unlock()
